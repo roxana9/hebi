@@ -29,3 +29,6 @@ checkpoints/
 # Environment
 .env
 .venv/
+
+# Documentation images
+!docs/images/*.png

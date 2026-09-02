@@ -1,0 +1,30 @@
+# Same settings as xenium_bc.yaml, but the .pt sections were rebuilt with
+# library-size normalisation + log1p instead of raw counts.
+checkpoint_path: /DATA1/Roxana/Hierarchy/Two_levels/hebi_foundation_best_new.pt
+data_dir:        /DATA1/Roxana/Hierarchy/xenium_bc_log
+vocab_path:      /DATA1/Roxana/Hierarchy/Two_levels/default_gene_vocab.json
+
+section_files:
+  - Xenium_breast_cancer_rep1_harmonised1.pt
+  - Xenium_breast_cancer_rep2_harmonised2.pt
+
+h5ad_files:
+  - /DATA1/Roxana/Data/Xenium_bc/Xenium_breast_cancer_rep1_harmonised1.h5ad
+  - /DATA1/Roxana/Data/Xenium_bc/Xenium_breast_cancer_rep2_harmonised2.h5ad
+
+section_labels: [rep1, rep2]
+
+mode: zero_shot
+init: random
+cluster_method: kmeans
+
+n_cell_clusters: 18
+n_composition_niches: 12
+
+cell_type_key: annotation
+niche_key:     annotation
+
+lr: 1.0e-4
+num_epochs: 3
+seed: 2025
+output_dir: ./results/xenium_bc_normalised

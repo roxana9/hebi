@@ -1,0 +1,24 @@
+# Synthetic benchmark — single section, known ground-truth niches
+# Run across seeds 42, 0, 384, 789, 2025 for the significance tests.
+checkpoint_path: /DATA1/Roxana/Hierarchy/Two_levels/hebi_foundation_best_new.pt
+data_dir:        /DATA1/Roxana/Hierarchy/sim2/
+vocab_path:      /DATA1/Roxana/Hierarchy/Two_levels/default_gene_vocab.json
+
+section_files:
+  - sim1_1105genes_10000locs_strongincrements.pt
+
+h5ad_files:
+  - /DATA1/Roxana/Hierarchy/Data/sim1_1105genes_10000locs_strongincrements.h5ad
+
+mode: zero_shot
+init: random
+cluster_method: kmeans
+
+n_cell_clusters: 8
+n_composition_niches: 8
+
+cell_type_key: niche_types
+niche_key:     niche_types
+
+seed: 42
+output_dir: ./results/simulation

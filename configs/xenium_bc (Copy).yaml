@@ -1,0 +1,32 @@
+# Xenium breast cancer — 2 harmonised technical replicates
+# Replicate integration with per-section GRN graphs.
+checkpoint_path: /DATA1/Roxana/Hierarchy/Two_levels/hebi_foundation_best_new.pt
+data_dir:        /DATA1/Roxana/Hierarchy/xenium_multi/
+vocab_path:      /DATA1/Roxana/Hierarchy/Two_levels/default_gene_vocab.json
+
+section_files:
+  - Xenium_breast_cancer_rep1_harmonised.pt
+  - Xenium_breast_cancer_rep2_harmonised.pt
+
+h5ad_files:
+  - /DATA1/Roxana/Data/Xenium_bc/Xenium_breast_cancer_rep1_harmonised1.h5ad
+  - /DATA1/Roxana/Data/Xenium_bc/Xenium_breast_cancer_rep2_harmonised2.h5ad
+
+mode: continual
+init: pretrained
+cluster_method: kmeans
+
+n_cell_clusters: 18
+n_composition_niches: 12
+
+cell_type_key: annotation
+niche_key:     annotation
+
+grn: true
+per_section_grn: true
+species: Human
+
+lr: 1.0e-4
+num_epochs: 10
+seed: 2025
+output_dir: ./results/xenium_bc

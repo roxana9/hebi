@@ -1,0 +1,30 @@
+# STARmap PLUS mouse CNS — 3 sagittal sections
+# Reproduces the multi-section STARmap benchmark.
+checkpoint_path: /DATA1/Roxana/Hierarchy/Two_levels/hebi_foundation_best_new.pt
+data_dir:        /DATA1/Roxana/Hierarchy/starmap_multi/
+vocab_path:      /DATA1/Roxana/Hierarchy/Two_levels/default_gene_vocab.json
+
+section_files:
+  - starmap_plus_mouse_cns_section_3.pt
+  - starmap_plus_mouse_cns_section_2.pt
+  - starmap_plus_mouse_cns_section_1.pt
+
+h5ad_files:
+  - /DATA1/Roxana/Data/starmap_plus_mouse_cns_section_3.h5ad
+  - /DATA1/Roxana/Data/starmap_plus_mouse_cns_section_2.h5ad
+  - /DATA1/Roxana/Data/starmap_plus_mouse_cns_section_1.h5ad
+
+mode: continual
+init: random
+cluster_method: kmeans
+
+n_cell_clusters: 16
+n_composition_niches: 10
+
+cell_type_key: Main_molecular_tissue_region
+niche_key:     Main_molecular_tissue_region
+
+lr: 1.0e-4
+num_epochs: 10
+seed: 2025
+output_dir: ./results/starmap

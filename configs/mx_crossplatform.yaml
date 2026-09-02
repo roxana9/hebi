@@ -1,0 +1,33 @@
+# Cross-platform: Xenium + MERSCOPE human breast cancer
+# Different gene panels, so per-section GRN graphs are required.
+#
+# continual + random ("NOP") is the setting the cross-platform result
+# rests on. Zero-shot fails on this task, so do not change mode here
+# without expecting the numbers to move.
+checkpoint_path: /DATA1/Roxana/Hierarchy/Two_levels/hebi_continual_k30_norm.pt
+data_dir:        /DATA1/Roxana/Hierarchy/MX/
+vocab_path:      /DATA1/Roxana/Hierarchy/Two_levels/default_gene_vocab.json
+
+section_files:
+  - Xenium_V1_FFPE_Human_Breast_IDC_With_Addon_outs.pt
+  - HumanBreastCancerPatient1_region_0.pt
+
+h5ad_files:
+  - /DATA1/Roxana/Data/MX/Xenium_V1_FFPE_Human_Breast_IDC_With_Addon_outs.h5ad
+  - /DATA1/Roxana/Data/MX/HumanBreastCancerPatient1_region_0.h5ad
+
+mode: continual
+init: random
+cluster_method: kmeans
+
+n_cell_clusters: 15
+n_composition_niches: 7
+
+per_section_grn: true
+species: Human
+
+lr: 1.0e-4
+num_epochs: 10
+
+seed: 2025
+output_dir: ./results/mx_crossplatform

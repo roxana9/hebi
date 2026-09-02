@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.ipynb_checkpoints/
+
+# Model checkpoints and processed data
+*.pt
+*.pth
+*.h5ad
+*.npz
+*.parquet
+
+# Results
+results/
+Xenium_results*/
+Xenium_CLINICAL_RAW/
+Starmap_results/
+MX_results/
+simulation*/
+checkpoints/
+
+# Large figures
+*.svg
+*.png
+
+# Environment
+.env
+.venv/

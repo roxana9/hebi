@@ -21,7 +21,9 @@ stays at zero.
 Author: Roxana
 """
 
+import argparse
 import os
+import sys
 import time
 import random
 import json
@@ -45,12 +47,26 @@ from hebi.model.hebi import (
 )
 
 
+# Loss weights for the objective in the Methods. lambda_X is 1 by
+# construction: the other terms are expressed relative to reconstruction.
+DEFAULT_LOSS_WEIGHTS = {
+    "X": 1.0,
+    "A": 1.0,
+    "MAE": 0.5,
+    "pool": 0.01,
+    "balance": 2.0,
+    "smooth": 3.0,
+    "coverage": 0.5,
+    "GRN": 2.0,
+}
+
+
 class Train:
     def __init__(
         self,
         data_path=None,                 # single slide (optional)
         data_dir=None,                  # directory of .pt slides (preferred)
-        vocab_path="/DATA1/Roxana/hebi_repo/default_gene_vocab.json",
+        vocab_path="./default_gene_vocab.json",
         l0_encoder_type: str = "transformer",
         batch_size=2048,
         num_workers=4,
@@ -66,7 +82,22 @@ class Train:
         checkpoint_path: str = "best_model.pt",
         device=None,
         seed: int = 0,
+        loss_weights: dict = None,
     ):
+        # --- Loss weights ---
+        # Defaults are the values the released checkpoint was trained
+        # with. Overriding them changes the objective, so any run that
+        # does should say so alongside its results.
+        self.loss_weights = dict(DEFAULT_LOSS_WEIGHTS)
+        if loss_weights:
+            unknown = set(loss_weights) - set(DEFAULT_LOSS_WEIGHTS)
+            if unknown:
+                raise ValueError(
+                    f"unknown loss weight(s): {sorted(unknown)}. "
+                    f"Valid keys: {sorted(DEFAULT_LOSS_WEIGHTS)}"
+                )
+            self.loss_weights.update(loss_weights)
+
         # --- Reproducibility ---
         self.seed = seed
         self.set_seed(self.seed)
@@ -241,6 +272,7 @@ class Train:
             "epoch": epoch,
             "avg_loss": avg_loss,
             "seed": self.seed,
+            "loss_weights": self.loss_weights,
             "gene_embedder": self.gene_embedder.state_dict(),
             "gene_linear": self.gene_linear.state_dict(),
             "model_lvl0": self.model_lvl0.state_dict(),
@@ -543,18 +575,19 @@ class Train:
                 loss_pool_balance = self.pool_balancing_loss(S_matrix)
                 loss_smooth = self.smooth_map_entropy_loss(z2_attn_probs)
 
+                w = self.loss_weights
                 loss_base = (
-                    loss_X
-                    + 1 * loss_A
-                    + 0.5 * loss_mae
-                    + 0.01 * loss_pool
-                    + 2 * loss_pool_balance
-                    + 3 * loss_smooth
-                    + 0.5 * loss_coverage
+                    w["X"] * loss_X
+                    + w["A"] * loss_A
+                    + w["MAE"] * loss_mae
+                    + w["pool"] * loss_pool
+                    + w["balance"] * loss_pool_balance
+                    + w["smooth"] * loss_smooth
+                    + w["coverage"] * loss_coverage
                 )
 
                 if loss_grn is not None:
-                    loss_total = loss_base + 2 * loss_grn
+                    loss_total = loss_base + w["GRN"] * loss_grn
                 else:
                     loss_total = loss_base
 
@@ -699,27 +732,96 @@ class Train:
 # =====================================================================
 # Main
 # =====================================================================
-if __name__ == "__main__":
-    try:
-        import torch_geometric.utils  # noqa: F401
-    except ImportError:
-        print("Please ensure torch_geometric is installed: pip install torch-geometric")
+def build_parser():
+    p = argparse.ArgumentParser(
+        description="Pretrain HEBI on a corpus of preprocessed sections."
+    )
+    p.add_argument("--config", type=str, default=None,
+                   help="YAML config. Command-line flags override it.")
+
+    p.add_argument("--data_dir", type=str,
+                   help="Directory of preprocessed .pt sections.")
+    p.add_argument("--vocab_path", type=str,
+                   help="Gene vocabulary JSON.")
+    p.add_argument("--checkpoint_path", type=str,
+                   default="hebi_foundation.pt",
+                   help="Where the best checkpoint is written.")
+
+    p.add_argument("--l0_encoder_type", choices=["transformer", "gat"],
+                   default="transformer")
+    p.add_argument("--global_num_layers", type=int, default=2)
+    p.add_argument("--num_prototypes_lvl1", type=int, default=1024,
+                   help="METIS communities, the micro-node level.")
+    p.add_argument("--num_prototypes_lvl2", type=int, default=20,
+                   help="Niche prototypes, the macro level.")
+    p.add_argument("--decoder_hidden_dim", type=int, default=256)
+
+    p.add_argument("--batch_size", type=int, default=2048)
+    p.add_argument("--num_workers", type=int, default=4)
+    p.add_argument("--num_epochs", type=int, default=100)
+    p.add_argument("--lr", type=float, default=1e-4)
+    p.add_argument("--weight_decay", type=float, default=0.0)
+    p.add_argument("--early_stopping_patience", type=int, default=10)
+    p.add_argument("--min_delta", type=float, default=1e-4)
+
+    p.add_argument("--device", type=str, default=None)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--plot_losses", action="store_true",
+                   help="Show the loss curves when training finishes.")
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    loss_weights = {}
+
+    if args.config:
+        import yaml
+
+        with open(args.config) as f:
+            config = yaml.safe_load(f) or {}
+
+        loss_weights = config.pop("loss_weights", {}) or {}
+
+        tokens = argv if argv is not None else sys.argv[1:]
+        given = {t.lstrip("-") for t in tokens if t.startswith("--")}
+        for key, value in config.items():
+            if key not in given and hasattr(args, key):
+                setattr(args, key, value)
+
+    for required in ("data_dir", "vocab_path"):
+        if getattr(args, required, None) is None:
+            raise SystemExit(f"--{required} is required (flag or config file)")
 
     trainer = Train(
-        data_dir="/DATA1/Roxana/Hierarchy/processed_train_data_wout_norm",  # <-- folder of .pt files
-        l0_encoder_type="transformer",
-        batch_size=2048,
-        num_workers=4,
-        lr=1e-4,
-        num_epochs=100,
-        global_num_layers=2,
-        num_prototypes_lvl1=1024,
-        num_prototypes_lvl2=20,
-        decoder_hidden_dim=256,
-        early_stopping_patience=10,
-        checkpoint_path="hebi_foundation_best_new3.pt",
-        seed=0,
+        data_dir=args.data_dir,
+        vocab_path=args.vocab_path,
+        l0_encoder_type=args.l0_encoder_type,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        num_epochs=args.num_epochs,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        global_num_layers=args.global_num_layers,
+        num_prototypes_lvl1=args.num_prototypes_lvl1,
+        num_prototypes_lvl2=args.num_prototypes_lvl2,
+        decoder_hidden_dim=args.decoder_hidden_dim,
+        early_stopping_patience=args.early_stopping_patience,
+        min_delta=args.min_delta,
+        checkpoint_path=args.checkpoint_path,
+        device=args.device,
+        seed=args.seed,
+        loss_weights=loss_weights,
     )
 
+    print("Loss weights: " +
+          ", ".join(f"{k}={v}" for k, v in trainer.loss_weights.items()))
+
     trainer.run()
-    trainer.plot_losses()
+    if args.plot_losses:
+        trainer.plot_losses()
+    return trainer
+
+
+if __name__ == "__main__":
+    main()

@@ -3,7 +3,7 @@ import numpy as np
 import seaborn as sns
 from anndata import AnnData
 
-from _constants import Keys
+from hebi.constants import Keys
 
 
 def get_categorical_color_palette(

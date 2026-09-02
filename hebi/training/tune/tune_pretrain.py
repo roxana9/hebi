@@ -20,7 +20,7 @@ import torch.nn.functional as F
 import torch_geometric
 from tqdm import tqdm
 
-from pretraining import Train  # change this import
+from hebi.training.pretrain import Train
 
 
 class TuneTrain(Train):

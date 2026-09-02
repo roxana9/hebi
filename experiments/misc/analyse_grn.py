@@ -14,17 +14,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 import matplotlib.cm as cm
-from fine_tune.hebi_finetuner import HebiCellTypeClassifier
-from fine_tune.supervised_loader import (
+from hebi.training.finetune.finetuner import HebiCellTypeClassifier
+from hebi.training.finetune.loader import (
     get_slide_list,
     load_supervised_slide_dict,
     build_local_sampler,
     iterate_supervised_batches,
 )
 
-from clustering.build_grn import build_hetero_grn
-from grn_layer import GRNRefinementLayer
-from preprocess_offline import harmonise_adata
+from hebi.grn.build import build_hetero_grn
+from hebi.model.grn_layer import GRNRefinementLayer
+from hebi.data.vocabulary import harmonise_adata
 import re
 
 def default_housekeeping_set():

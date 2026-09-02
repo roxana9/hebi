@@ -1,0 +1,48 @@
+# Foundation pretraining.
+#
+#   hebi-pretrain --config configs/pretrain.yaml
+#
+# These are the settings the released checkpoint was trained with. The
+# loss_weights block below is the objective in the Methods, and is the
+# source for Supplementary Table S3 — edit here, not in the paper.
+
+data_dir:        /DATA1/Roxana/Hierarchy/processed_train_data_wout_norm
+vocab_path:      /DATA1/Roxana/Hierarchy/Two_levels/default_gene_vocab.json
+checkpoint_path: hebi_foundation.pt
+
+# --- architecture ---
+l0_encoder_type: transformer
+global_num_layers: 2
+num_prototypes_lvl1: 1024     # METIS communities (micro-node level)
+num_prototypes_lvl2: 20       # niche prototypes (macro level)
+decoder_hidden_dim: 256
+
+# --- optimisation ---
+batch_size: 2048
+num_workers: 4
+num_epochs: 100
+lr: 1.0e-4
+weight_decay: 0.0
+early_stopping_patience: 10
+min_delta: 1.0e-4
+
+seed: 0
+
+# --- objective ---
+# X        expression reconstruction
+# A        adjacency reconstruction on z0
+# MAE      masked reconstruction, 15% of genes held out
+# pool     assignment entropy of the pooler
+# balance  niche-prototype usage, driven toward uniform
+# smooth   batch-averaged niche attention, also toward uniform
+# coverage per-cell niche commitment (in tension with smooth by design)
+# GRN      masked gene-expression prediction, only when the module is active
+loss_weights:
+  X: 1.0
+  A: 1.0
+  MAE: 0.5
+  pool: 0.01
+  balance: 2.0
+  smooth: 3.0
+  coverage: 0.5
+  GRN: 2.0

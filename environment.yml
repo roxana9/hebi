@@ -1,0 +1,58 @@
+# Conda/mamba environment for HEBI.
+#
+#   mamba env create -f environment.yml
+#   mamba activate hebi
+#   pip install -e .
+#
+# Versions are those the model was developed and benchmarked with.
+# The CUDA build of PyTorch is pinned via pytorch-cuda; drop that line
+# and use cpuonly for a CPU-only install.
+name: hebi
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - bioconda
+
+dependencies:
+  - python=3.11
+
+  # --- PyTorch (CUDA 12.4) ---
+  - pytorch=2.6.0
+  - pytorch-cuda=12.4
+
+  # --- scientific stack ---
+  - numpy>=1.26
+  - pandas>=2.0
+  - scipy>=1.11
+  - scikit-learn>=1.4
+  - matplotlib>=3.8
+  - seaborn>=0.13
+  - networkx>=3.0
+  - h5py>=3.10
+  - openpyxl>=3.1
+  - pyyaml>=6.0
+  - tqdm>=4.66
+  - requests>=2.31
+
+  # --- single-cell / spatial ---
+  - scanpy>=1.10
+  - anndata>=0.10
+
+  # --- optional: leiden clustering (--cluster_method leiden) ---
+  - leidenalg>=0.10
+  - python-igraph>=0.11
+
+  # --- optional: mclust clustering (--cluster_method mclust) ---
+  # Needs R as well as rpy2. Uncomment to install both.
+  # - r-base>=4.3
+  # - r-mclust
+  # - rpy2>=3.5
+
+  - pip
+  - pip:
+      # Not on conda-forge, or newer there via pip:
+      - torch-geometric>=2.6
+      - pymetis>=2023.1
+      - mygene>=3.2

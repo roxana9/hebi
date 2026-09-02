@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hebi"
+version = "0.1.0"
+description = "HEBI: a hierarchical graph foundation model for spatial transcriptomics"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Roxana Zahedi" }]
+keywords = [
+    "spatial transcriptomics",
+    "foundation model",
+    "graph neural network",
+    "spatial domains",
+    "gene regulatory network",
+]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+]
+
+# PyTorch itself is deliberately absent: the right build depends on the
+# CUDA version, so it is installed first from pytorch.org (see README).
+dependencies = [
+    "torch-geometric>=2.6",
+    "scanpy>=1.10",
+    "anndata>=0.10",
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+    "networkx>=3.0",
+    "pymetis>=2023.1",
+    "requests>=2.31",
+    "mygene>=3.2",
+    "h5py>=3.10",
+    "openpyxl>=3.1",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Leiden clustering: --cluster_method leiden
+leiden = ["leidenalg>=0.10", "igraph>=0.11"]
+
+# mclust clustering: --cluster_method mclust. Also needs R with the
+# mclust package installed; rpy2 alone is not enough.
+mclust = ["rpy2>=3.5"]
+
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+    "mkdocs-jupyter>=0.24",
+]
+
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+all = ["hebi[leiden,mclust]"]
+
+[project.scripts]
+hebi-preprocess = "hebi.data.preprocess:main"
+hebi-pretrain = "hebi.training.pretrain:main"
+hebi-run = "hebi.inference.pipeline:main"
+
+[project.urls]
+Homepage = "https://github.com/roxana9/hebi"
+Repository = "https://github.com/roxana9/hebi"
+Issues = "https://github.com/roxana9/hebi/issues"
+
+[tool.setuptools.packages.find]
+include = ["hebi*"]
+
+[tool.setuptools.package-data]
+hebi = ["../default_gene_vocab.json"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"

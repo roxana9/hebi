@@ -17,9 +17,9 @@ import pandas as pd
 from tqdm import tqdm
 
 # --- YOUR MODULES ---
-from build_graph import build_spatial_graph
-from coarsening_metis import create_metis_partition 
-from preprocess_offline import harmonise_adata
+from hebi.data.graph import build_spatial_graph
+from hebi.data.coarsening import create_metis_partition 
+from hebi.data.vocabulary import harmonise_adata
 
 warnings.filterwarnings('ignore')
 

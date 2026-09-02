@@ -24,7 +24,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, silhouette_score
 import scanpy as sc
 
-from pretraining import Train  # change this import
+from hebi.training.pretrain import Train
 
 
 class PrototypeTuneTrain(Train):

@@ -10,7 +10,7 @@ import scanpy as sc
 import numpy as np
 import torch
 from typing import Tuple
-from Alignment import harmonise_adata
+from hebi.data.vocabulary import harmonise_adata
 def _find_spatial_key(adata) -> str:
     """
     Automatically detect the correct key in adata.obsm that stores spatial coordinates.

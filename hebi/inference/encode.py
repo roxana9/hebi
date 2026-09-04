@@ -93,6 +93,24 @@ def load_hebi(
             trainer.device
         )
 
+        if "grn_layer" in state:
+            trainer.grn_layer.load_state_dict(state["grn_layer"])
+            print("Loaded trained GRN weights from the checkpoint")
+
+            if "grn_expr_decoder" in state:
+                trainer.grn_expr_decoder = torch.nn.Linear(
+                    trainer.embedding_size, 1
+                ).to(trainer.device)
+                trainer.grn_expr_decoder.load_state_dict(
+                    state["grn_expr_decoder"]
+                )
+        else:
+            print("WARNING: this checkpoint contains no GRN weights, so the "
+                  "refinement layer is untrained.")
+            print("         Attention from it reflects graph structure and "
+                  "expression only, not anything learned. Run --mode continual "
+                  "--grn to train it, and use the checkpoint that produces.")
+
     print(f"Loaded checkpoint {checkpoint_path} (epoch {state.get('epoch', '?')})")
     return trainer
 

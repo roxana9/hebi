@@ -36,8 +36,8 @@ from tqdm import tqdm
 import torch_geometric
 import matplotlib.pyplot as plt
 
-from hebi.data.sampler import LocalSampler
-from hebi.model.hebi import (
+from sampler import LocalSampler
+from model import (
     GATEncoder,
     LocalTransformerEncoder,
     NodeToPrototypeTransformer,
@@ -283,6 +283,18 @@ class Train:
             "optimizer": self.optimizer.state_dict(),
             "vocab": self.gene_vocab,
         }
+
+        # The GRN modules are attached from outside and only exist when the
+        # module is active. Without these two lines the refinement layer is
+        # trained during continual adaptation and then discarded here, so
+        # encoding would rebuild it randomly and every gene-level result —
+        # hub genes, edge salience, cell-cell communication — would come
+        # from untrained attention.
+        if getattr(self, "grn_layer", None) is not None:
+            state["grn_layer"] = self.grn_layer.state_dict()
+        if getattr(self, "grn_expr_decoder", None) is not None:
+            state["grn_expr_decoder"] = self.grn_expr_decoder.state_dict()
+
         torch.save(state, self.checkpoint_path)
         print(
             f"💾 Saved new best checkpoint (loss={avg_loss:.4f}) → {self.checkpoint_path}"

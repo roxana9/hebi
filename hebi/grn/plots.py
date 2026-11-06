@@ -68,8 +68,12 @@ def _extract_ligrec_edges(gene_graphs, gene_names, grn_attn_weights,
         if torch.is_tensor(grn_attn_weights) else np.asarray(grn_attn_weights).ravel()
 
     rows = []
+    forward = getattr(g, "ligrec_forward", None)
+    forward = forward.cpu().numpy() if forward is not None else None
     for e in range(edge_index.shape[1]):
         if edge_attr[e, ligrec_idx] > 0:
+            if forward is not None and not forward[e]:
+                continue
             rows.append({
                 "ligand":   gene_names[int(edge_index[0, e])],
                 "receptor": gene_names[int(edge_index[1, e])],
@@ -116,12 +120,16 @@ def _cluster_edge_scores(adata, cluster_key, gene_graphs, gene_names,
 
     var_names = list(adata.var_names)
     var_to_col = {g: i for i, g in enumerate(var_names)}
-
+    rev = getattr(g, "reverse_only", None)
+    rev = (rev.cpu().numpy().astype(bool).reshape(-1) if rev is not None
+       else np.zeros(edge_index.shape[1], dtype=bool))
     results = {}
     for c in unique_clusters:
         rows = []
         expr = mean_expr[c]
         for e in range(edge_index.shape[1]):
+            if rev[e]:
+                continue
             src_gene = gene_names[int(edge_index[0, e])]
             dst_gene = gene_names[int(edge_index[1, e])]
             a = float(attn[e])

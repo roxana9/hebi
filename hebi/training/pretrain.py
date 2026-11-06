@@ -36,15 +36,29 @@ from tqdm import tqdm
 import torch_geometric
 import matplotlib.pyplot as plt
 
-from sampler import LocalSampler
-from model import (
+from hebi.data.sampler import LocalSampler
+from hebi.model.hebi import (
     GATEncoder,
     LocalTransformerEncoder,
-    NodeToPrototypeTransformer,
-    PrototypePoolerL2,
-    FeatureTransformerL2,
+    CommunityTransformerL1,
+    CommunityPoolerL2,
+    NicheTransformerL2,
     GlobalMLPDecoder,
+    hierarchy_forward,
 )
+
+# Gradient scale from the niche pooler into the community representations
+# (and through them into L0/L1). 0.1: niche-level objectives shape the
+# cell-level encoder only weakly.
+POOLER_GRAD_SCALE = 1.0
+MAE_MASK_RATIO = 0.15
+# True: the GRN-refined gene embeddings replace the original ones in the main
+# path (previous behaviour). False: the GRN layer is trained only by its own
+# loss and does not change the encoder input; encode.py follows the same flag.
+GRN_FEEDS_MAIN_PATH = False
+# True: the GRN branch reads a detached copy of the gene embeddings, so its loss
+# cannot change the embeddings the encoder uses either.
+GRN_DETACH_INPUT = True
 
 
 # Loss weights for the objective in the Methods. lambda_X is 1 by
@@ -53,7 +67,7 @@ DEFAULT_LOSS_WEIGHTS = {
     "X": 1.0,
     "A": 1.0,
     "MAE": 0.5,
-    "pool": 0.01,
+    "pool": 0.0,      # assignment-entropy term removed; key kept so old configs load
     "balance": 2.0,
     "smooth": 3.0,
     "coverage": 0.5,
@@ -83,7 +97,14 @@ class Train:
         device=None,
         seed: int = 0,
         loss_weights: dict = None,
+        verbose: int = 1,
     ):
+        # --- Output ---
+        # 1 prints per-slide progress, which is useful over a long
+        # pretraining run. 0 prints one line per epoch, which is what
+        # a short continual adaptation inside a larger pipeline wants.
+        self.verbose = verbose
+
         # --- Loss weights ---
         # Defaults are the values the released checkpoint was trained
         # with. Overriding them changes the objective, so any run that
@@ -100,7 +121,7 @@ class Train:
 
         # --- Reproducibility ---
         self.seed = seed
-        self.set_seed(self.seed)
+        self.set_seed(self.seed, verbose=self.verbose)
 
         # --- Data config ---
         self.data_path = data_path
@@ -132,7 +153,8 @@ class Train:
             self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
-        print(f"--- Using device: {self.device} ---")
+        if self.verbose:
+            print(f"--- Using device: {self.device} ---")
 
         # --- Gene vocab / embedding ---
         with open(self.vocab_path, "r") as f:
@@ -179,12 +201,14 @@ class Train:
         self.loss_pool_history = []
         self.loss_balance_history = []
         self.loss_smooth_map_history = []
+        self.loss_grn_history = []
+        self.loss_coverage_history = []
 
     # ------------------------------------------------------------------
     # Reproducibility
     # ------------------------------------------------------------------
     @staticmethod
-    def set_seed(seed: int):
+    def set_seed(seed: int, verbose: int = 1):
         """Seed every RNG that affects training: slide shuffling, neighbour
         sampling, weight init, masking, and negative-pair sampling."""
         random.seed(seed)
@@ -192,7 +216,8 @@ class Train:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-        print(f"🎲 Seed set to {seed}")
+        if verbose:
+            print(f"🎲 Seed set to {seed}")
 
     # ------------------------------------------------------------------
     # Data handling
@@ -213,7 +238,8 @@ class Train:
             if not files:
                 raise RuntimeError(f"No .pt files found in {self.data_dir}")
             self.data_files = files
-            print(f"📁 Found {len(files)} slides in {self.data_dir}")
+            if self.verbose:
+                print(f"📁 Found {len(files)} slides in {self.data_dir}")
         elif self.data_path is not None:
             self.data_files = [self.data_path]
             print(f"📁 Using single slide: {self.data_path}")
@@ -222,7 +248,8 @@ class Train:
 
     def load_data(self):
         """Load one preprocessed slide from self.data_path."""
-        print(f"📦 Loading preprocessed slide from {self.data_path}")
+        if self.verbose:
+            print(f"📦 Loading preprocessed slide from {self.data_path}")
         data = torch.load(self.data_path, map_location=self.device)
 
         self.X = data["X"].float().to(self.device)  # [N0, G_slide]
@@ -238,10 +265,11 @@ class Train:
             ids = [self.gene_vocab[g] for g in slide_genes]
             self.gene_ids = torch.tensor(ids, dtype=torch.long, device=self.device)
 
-        print(
-            f"✅ Loaded data: X={self.X.shape}, coords={self.coords.shape}, "
-            f"edge_index={self.edge_index.shape}"
-        )
+        if self.verbose:
+            print(
+                f"✅ Loaded data: X={self.X.shape}, coords={self.coords.shape}, "
+                f"edge_index={self.edge_index.shape}"
+            )
 
     # ------------------------------------------------------------------
     # Utils
@@ -296,15 +324,18 @@ class Train:
             state["grn_expr_decoder"] = self.grn_expr_decoder.state_dict()
 
         torch.save(state, self.checkpoint_path)
-        print(
-            f"💾 Saved new best checkpoint (loss={avg_loss:.4f}) → {self.checkpoint_path}"
-        )
+        if self.verbose:
+            print(
+                f"💾 Saved new best checkpoint (loss={avg_loss:.4f}) → "
+                f"{self.checkpoint_path}"
+            )
 
     # ------------------------------------------------------------------
     # Model + sampler
     # ------------------------------------------------------------------
     def build_models(self, N0, X_shape):
-        print("🔧 Initializing models...")
+        if self.verbose:
+            print("🔧 Initializing models...")
 
         # L0 encoder
         l0_config = {
@@ -317,10 +348,12 @@ class Train:
         }
 
         if self.l0_encoder_type == "gat":
-            print("  -> Using L0 Encoder: GATEncoder")
+            if self.verbose:
+                print("  -> Using L0 Encoder: GATEncoder")
             self.model_lvl0 = GATEncoder(**l0_config).to(self.device)
         elif self.l0_encoder_type == "transformer":
-            print("  -> Using L0 Encoder: LocalTransformerEncoder")
+            if self.verbose:
+                print("  -> Using L0 Encoder: LocalTransformerEncoder")
             self.model_lvl0 = LocalTransformerEncoder(**l0_config).to(self.device)
         else:
             raise ValueError(f"Unknown l0_encoder_type: {self.l0_encoder_type}")
@@ -336,15 +369,15 @@ class Train:
             "attn_dropout": 0.1,
             "num_prototypes": self.num_prototypes_lvl1,
         }
-        self.model_lvl1 = NodeToPrototypeTransformer(**transformer_l1_config).to(
+        self.model_lvl1 = CommunityTransformerL1(**transformer_l1_config).to(
             self.device
         )
 
-        # L2 pooler
-        self.pooler_lvl2 = PrototypePoolerL2(
+        # L2 pooler (communities -> niches)
+        self.pooler_lvl2 = CommunityPoolerL2(
             in_channels=128,
-            num_l1_prototypes=self.num_prototypes_lvl1,
             num_l2_prototypes=self.num_prototypes_lvl2,
+            grad_scale=POOLER_GRAD_SCALE,
         ).to(self.device)
 
         # L2 transformer
@@ -357,7 +390,7 @@ class Train:
             "ff_dropout": 0.1,
             "attn_dropout": 0.1,
         }
-        self.model_lvl2 = FeatureTransformerL2(**transformer_l2_config).to(self.device)
+        self.model_lvl2 = NicheTransformerL2(**transformer_l2_config).to(self.device)
 
         # Decoder
         self.global_decoder = GlobalMLPDecoder(
@@ -365,7 +398,8 @@ class Train:
         ).to(self.device)
 
         # Optimizer
-        print("🔧 Initializing optimizer...")
+        if self.verbose:
+            print("🔧 Initializing optimizer...")
         params = (
             list(self.gene_embedder.parameters())
             + list(self.gene_linear.parameters())
@@ -388,7 +422,8 @@ class Train:
             num_workers=self.num_workers,
             shuffle=True,
         )
-        print(f"✅ LocalSampler initialised: batch_size={self.batch_size}")
+        if self.verbose:
+            print(f"✅ LocalSampler initialised: batch_size={self.batch_size}")
 
     # ------------------------------------------------------------------
     # Losses
@@ -477,9 +512,11 @@ class Train:
         random.shuffle(self.data_files)
         for slide_idx, slide_path in enumerate(self.data_files):
             self.data_path = slide_path
-            print(
-                f"\n🧬 Epoch {epoch}: Slide {slide_idx+1}/{len(self.data_files)} → {slide_path}"
-            )
+            if self.verbose:
+                print(
+                    f"\n🧬 Epoch {epoch}: Slide {slide_idx+1}/"
+                    f"{len(self.data_files)} → {slide_path}"
+                )
             if getattr(self, "gene_graphs_list", None) is not None:
                 self.gene_graphs = self._match_grn_graph(slide_path)
             # Load slide & sampler
@@ -490,6 +527,7 @@ class Train:
                 self.sampler,
                 desc=f"Epoch {epoch} | slide {slide_idx+1}",
                 unit="batch",
+                disable=not self.verbose,
             )
 
             for i, (edge_block, node_idx_b, bs) in enumerate(pbar):
@@ -517,47 +555,69 @@ class Train:
                 loss_grn = torch.tensor(0.0, device=self.device)
                 if self.grn_layer is not None and self.gene_graphs is not None:
                     edge_index_grn = self.gene_graphs["global"].edge_index.to(self.device)
-                    gene_emb, _ = self.grn_layer(
-                        gene_emb=gene_emb,
-                        edge_index_grn=edge_index_grn,
-                        return_attention=False
-                    )
-                    # GRN expression prediction loss
+                
+                    # Masked gene-expression prediction. The mask is applied to
+                    # the INPUT, not only to the loss: a masked gene loses its
+                    # own embedding, so the only route to its expression is
+                    # through its neighbours in the gene graph. Scoring a
+                    # masked subset while leaving the input intact lets the
+                    # residual path carry each gene's own identity to the
+                    # decoder, which the task can be solved from without ever
+                    # using the attention.
                     if hasattr(self, "grn_expr_decoder"):
-                        grn_pred = self.grn_expr_decoder(gene_emb).squeeze(-1)
-                        true_gene_expr = x_batch_true.mean(dim=0)
                         mask_ratio = 0.15
-                        mask = torch.rand_like(true_gene_expr) < mask_ratio
+                        # mask selects WHICH genes are scored; embeddings are not
+                        # zeroed (zeroing left lin_r without gradient). The rand
+                        # call stays here so the RNG stream, and hence the MAE
+                        # mask and z0, are unchanged.
+                        mask = torch.rand(gene_emb.size(0), device=self.device) < mask_ratio
                         if mask.sum() > 0:
-                            loss_grn = F.mse_loss(grn_pred[mask], true_gene_expr[mask])
-                x_subgraph = x_subgraph_raw @ gene_emb  # [*, 128]
+                            gene_emb_in = gene_emb.detach() if GRN_DETACH_INPUT else gene_emb
+                            refined, attn = self.grn_layer(
+                                gene_emb=gene_emb_in,
+                                edge_index_grn=edge_index_grn,
+                                return_attention=True,
+                            )
+                            src, dst = edge_index_grn
+                            keep = src != dst                                  # no self-loops
+                            src, dst, attn_k = src[keep], dst[keep], attn[keep]
+                            xz = (x_batch_true - x_batch_true.mean(0)) / (x_batch_true.std(0) + 1e-6)
+                            msg = xz[:, src] * attn_k.unsqueeze(0)
+                            agg = torch.zeros_like(xz).index_add_(1, dst, msg)
+                            scale = self.grn_expr_decoder(refined).squeeze(-1)
+                            grn_pred = agg * scale.unsqueeze(0)
+                            has_reg = torch.zeros(gene_emb.size(0), dtype=torch.bool,
+                                                  device=self.device)
+                            has_reg[dst] = True
+                            score = mask & has_reg
+                            if score.any():
+                                loss_grn = F.mse_loss(grn_pred[:, score], xz[:, score])
+                    # Unmasked pass, for the main model path. Set
+                    # GRN_FEEDS_MAIN_PATH = False to keep the encoder input free
+                    # of the GRN layer (option 2).
+                    if GRN_FEEDS_MAIN_PATH:
+                        gene_emb, _ = self.grn_layer(
+                            gene_emb=gene_emb,
+                            edge_index_grn=edge_index_grn,
+                            return_attention=False
+                        )
+                # Masked autoencoding: a random 15% of (cell, gene) entries is
+                # zeroed in the INPUT; L_MAE scores the reconstruction of
+                # exactly those entries, so they must be inferred from the
+                # cell's other genes and its neighbours.
+                mae_mask = torch.rand_like(x_subgraph_raw) < MAE_MASK_RATIO
+                x_subgraph = x_subgraph_raw.masked_fill(mae_mask, 0.0) @ gene_emb  # [*, 128]
 
                 # L0
                 z0_batch = self.model_lvl0(
                     x_subgraph, edge_index_subgraph, edge_attr_b, None, bs=bs
                 )
 
-                # L1
+                # L1 (communities of this section) + L2 (niches)
                 node2comm_batch = self.node2comm_fixed[target_node_indices_global]
-                z1_batch = self.model_lvl1.forward(
-                    x_lower=z0_batch,
-                    node2comm_batch=node2comm_batch,
-                    super_sp_global=self.super_sp_fixed,
-                )
-
-                # L2
-                C_L1 = self.model_lvl1.prototypes
-                C_L2, S_matrix = self.pooler_lvl2(C_L1)
-
-                Dk_raw_L1 = self.super_sp_fixed[node2comm_batch.long(), :]
-                S_hard = torch.zeros_like(S_matrix)
-                S_hard.scatter_(1, S_matrix.argmax(dim=1, keepdim=True), 1.0)
-                Hk_L2_distances = torch.matmul(Dk_raw_L1.float(), S_hard.float())
-
-                z2_batch, z2_attn_probs = self.model_lvl2.forward(
-                    x_lower=z1_batch,
-                    c_l2_prototypes=C_L2,
-                    hk_l2_distances=Hk_L2_distances,
+                z1_batch, z2_batch, z2_attn_probs, S_matrix = hierarchy_forward(
+                    self.model_lvl1, self.pooler_lvl2, self.model_lvl2,
+                    z0_batch, node2comm_batch, self.super_sp_fixed,
                 )
                 loss_coverage = self.proto_coverage_loss(z2_attn_probs)
 
@@ -573,17 +633,10 @@ class Train:
                     edge_index_batch=edge_index_batch_local,
                     num_nodes_batch=edge_index_subgraph.max().item() + 1,  # actual subgraph size
                 )
-                mask_ratio = 0.15
-                mask_missing = (torch.rand_like(x_batch_true) < mask_ratio).float()
-                X_hat_missing_parts = x_hat_batch * mask_missing
-                X_true_missing_parts = x_batch_true * mask_missing
-                loss_mae = F.mse_loss(
-                    X_hat_missing_parts,
-                    X_true_missing_parts,
-                    reduction="sum",
-                ) / (mask_missing.sum() + 1e-8)
+                m = mae_mask[:bs].float()                 # entries hidden from the input
+                loss_mae = ((x_hat_batch - x_batch_true) ** 2 * m).sum() / (m.sum() + 1e-8)
 
-                loss_pool = self.pool_entropy_loss(S_matrix)
+                loss_pool = torch.tensor(0.0, device=self.device)   # removed from the objective
                 loss_pool_balance = self.pool_balancing_loss(S_matrix)
                 loss_smooth = self.smooth_map_entropy_loss(z2_attn_probs)
 
@@ -592,7 +645,6 @@ class Train:
                     w["X"] * loss_X
                     + w["A"] * loss_A
                     + w["MAE"] * loss_mae
-                    + w["pool"] * loss_pool
                     + w["balance"] * loss_pool_balance
                     + w["smooth"] * loss_smooth
                     + w["coverage"] * loss_coverage
@@ -606,9 +658,16 @@ class Train:
                 # Backprop
                 self.optimizer.zero_grad(set_to_none=True)
                 loss_total.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    self.optimizer.param_groups[0]["params"], max_norm=1.0
-                )
+                grn_ids = set()
+                if self.grn_layer is not None:
+                    grn_ids |= {id(p) for p in self.grn_layer.parameters()}
+                if getattr(self, "grn_expr_decoder", None) is not None:
+                    grn_ids |= {id(p) for p in self.grn_expr_decoder.parameters()}
+                all_params = [p for group in self.optimizer.param_groups for p in group["params"]]
+                torch.nn.utils.clip_grad_norm_([p for p in all_params if id(p) not in grn_ids], max_norm=1.0)
+                grn_params = [p for p in all_params if id(p) in grn_ids]
+                if grn_params:
+                    torch.nn.utils.clip_grad_norm_(grn_params, max_norm=1.0)
                 self.optimizer.step()
 
                 # Accumulate
@@ -650,17 +709,21 @@ class Train:
 
         elapsed = time.time() - start_time
 
-        print(f"\n✅ Epoch {epoch} DONE in {elapsed/60:.1f} min")
-        print(f"   Avg Total Loss: {avg_loss_total:.4f}")
-        print(f"   Avg Loss_X:     {avg_loss_X:.4f}")
-        print(f"   Avg Loss_MAE:   {avg_loss_MAE:.4f}")
-        print(f"   Avg Loss_A:     {avg_loss_A:.4f}")
-        print(f"   Avg Pool:       {avg_loss_pool:.4f}")
-        print(f"   Avg Balance:    {avg_loss_pool_balance:.4f}")
-        print(f"   Avg Smooth:     {avg_loss_smooth:.4f}")
-        print(f"   Avg GRN:        {avg_loss_grn:.4f}")
-        print(f"   Avg Coverage:   {avg_loss_coverage:.4f}")
-        print(f"   GPU:            {self.gpu_usage_str()}")
+        if self.verbose:
+            print(f"\n✅ Epoch {epoch} DONE in {elapsed/60:.1f} min")
+            print(f"   Avg Total Loss: {avg_loss_total:.4f}")
+            print(f"   Avg Loss_X:     {avg_loss_X:.4f}")
+            print(f"   Avg Loss_MAE:   {avg_loss_MAE:.4f}")
+            print(f"   Avg Loss_A:     {avg_loss_A:.4f}")
+            print(f"   Avg Pool:       {avg_loss_pool:.4f}")
+            print(f"   Avg Balance:    {avg_loss_pool_balance:.4f}")
+            print(f"   Avg Smooth:     {avg_loss_smooth:.4f}")
+            print(f"   Avg GRN:        {avg_loss_grn:.4f}")
+            print(f"   Avg Coverage:   {avg_loss_coverage:.4f}")
+            print(f"   GPU:            {self.gpu_usage_str()}")
+        else:
+            print(f"  epoch {epoch:>3}  loss {avg_loss_total:7.4f}  "
+                  f"({elapsed:.0f}s)")
 
         # Store for plotting
         self.loss_total_history.append(avg_loss_total)
@@ -670,6 +733,8 @@ class Train:
         self.loss_pool_history.append(avg_loss_pool)
         self.loss_balance_history.append(avg_loss_pool_balance)
         self.loss_smooth_map_history.append(avg_loss_smooth)
+        self.loss_grn_history.append(avg_loss_grn)
+        self.loss_coverage_history.append(avg_loss_coverage)
 
         return avg_loss_total
 
@@ -687,9 +752,16 @@ class Train:
         self.build_models(N0, self.X.shape)
 
         print("\n🚀 Starting foundation pretraining over all slides...")
+        base = os.path.splitext(self.checkpoint_path)[0]
         for epoch in range(1, self.num_epochs + 1):
             avg_loss = self.train_epoch(epoch)
-
+            print(f"   w2 {self.model_lvl2.slope.detach().cpu().numpy().round(2)}  "
+                     f"T {self.model_lvl2.temperature.item():.2f}")
+            if epoch % 10 == 0 or epoch == self.num_epochs:
+                path = self.checkpoint_path
+                self.checkpoint_path = f"{base}_ep{epoch}.pt"
+                self.save_checkpoint(epoch, avg_loss)
+                self.checkpoint_path = path
             if avg_loss + self.min_delta < self.best_loss:
                 self.best_loss = avg_loss
                 self.epochs_no_improve = 0

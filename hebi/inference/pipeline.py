@@ -1,32 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-HEBI inference pipeline: encode sections, assign prototypes and niches,
-score against annotations.
+HEBI inference, in three stages.
 
-Python API
-----------
-    from hebi.inference.pipeline import run_hebi
+The stages are separate because they cost very different amounts. Encoding
+adapts the model and runs it over every cell, which takes minutes to
+hours. Clustering is a few k-means fits over embeddings that already
+exist, which takes seconds. Keeping them apart means trying a different
+number of clusters does not re-encode anything.
 
-    sections, trainer, grn_attn = run_hebi(
-        checkpoint_path="hebi_foundation.pt",
-        data_dir="processed/",
-        section_files=["section_1.pt", "section_2.pt"],
-        h5ad_files=["section_1.h5ad", "section_2.h5ad"],
-        vocab_path="default_gene_vocab.json",
-        n_cell_clusters=18,
-        n_composition_niches=12,
-    )
+    sections, trainer, grn = encode_sections(...)          # slow, once
 
-Command line
-------------
-    python -m hebi.inference.pipeline --config configs/starmap.yaml
-    python -m hebi.inference.pipeline --checkpoint_path ... --data_dir ...
+    cluster_sections(sections, n_cell_clusters=16,
+                     n_composition_niches=16)              # seconds
 
-Labels written to each section's .obs:
-    prototypes           Level-2 attention argmax
-    cell_clusters        clustering of the cell-level z0
-    composition_niches   k-means on local prototype composition
+    cluster_sections(sections, n_cell_clusters=24,
+                     n_composition_niches=12)              # seconds again
+
+    analyse_grn(sections, grn, ...)                        # GRN + CCC
+
+Labels are named after the setting that produced them — z0_kmeans_16,
+comp_niches_12 — so several clusterings coexist on the same AnnData and
+their figures do not overwrite each other.
+
+run_hebi() runs all three in order and is what the command line calls.
 """
 
 import argparse
@@ -41,12 +38,11 @@ import torch
 from hebi.data.vocabulary import harmonise_adata
 from hebi.grn.analysis import run_grn_analysis
 from hebi.grn.ccc_chord import plot_ccc_chord, write_ccc_excel
+from hebi.grn.niche_activity import niche_edge_activity, plot_top_edges_heatmap
 from hebi.grn.build import build_hetero_grn
 from hebi.inference.adapt import continual_adapt, create_random_checkpoint
 from hebi.inference.cluster import (
     CLUSTER_METHODS,
-    KEY_CELL_CLUSTERS,
-    KEY_COMPOSITION_NICHES,
     KEY_PROTOTYPES,
     build_composition_vectors,
     cluster_embedding,
@@ -82,6 +78,7 @@ def load_sections(
     filter_min_counts: int = None,
     drop_unlabelled: bool = False,
     point_size: float = None,
+    species: str = "Human",
 ):
     """Read sections and project onto the global gene vocabulary.
 
@@ -105,7 +102,7 @@ def load_sections(
             sc.pp.normalize_total(adata, target_sum=1e4)
             sc.pp.log1p(adata)
 
-        adata = harmonise_adata(adata, vocab_path)
+        adata = harmonise_adata(adata, vocab_path,species=species)
 
         if drop_unlabelled and "annotation" in adata.obs.columns:
             adata = adata[adata.obs["annotation"] != "Unlabeled"].copy()
@@ -115,7 +112,22 @@ def load_sections(
         print(f"  {adata.n_obs} cells, {adata.n_vars} genes")
         sections.append(adata)
     return sections
-
+def assert_graph_matches_pt(gene_names, data_dir, section_file):
+    """Stop if the gene graph's gene order differs from the .pt."""
+    pt = torch.load(os.path.join(data_dir, section_file),
+                    map_location="cpu", weights_only=False)
+    pt_genes = [str(g).upper() for g in pt["gene_names"]]
+    graph_genes = [str(g).upper() for g in gene_names]
+    if pt_genes != graph_genes:
+        first = next((i for i, (a, b) in enumerate(zip(pt_genes, graph_genes))
+                      if a != b), min(len(pt_genes), len(graph_genes)))
+        raise SystemExit(
+            f"Gene graph does not match {section_file}: "
+            f"{len(graph_genes)} vs {len(pt_genes)} genes, first difference "
+            f"at index {first}. GRN attention would be assigned to the "
+            "wrong genes.")
+    print(f"  gene graph matches {section_file} ({len(pt_genes)} genes, "
+          "same order)")
 
 def align_sections(sections, data_dir, section_files, tolerance=1e-6):
     """Make each AnnData hold exactly the cells its .pt encodes, in order.
@@ -197,6 +209,452 @@ def align_sections(sections, data_dir, section_files, tolerance=1e-6):
     return aligned
 
 
+def encode_sections(
+    checkpoint_path: str,
+    data_dir: str,
+    section_files,
+    h5ad_files,
+    vocab_path: str,
+    mode: str = "zero_shot",
+    init: str = "pretrained",
+    section_labels=None,
+    grn: bool = False,
+    species: str = "Human",
+    per_section_grn: bool = False,
+    lr: float = 1e-4,
+    num_epochs: int = 10,
+    output_dir: str = "./hebi_results",
+    output_checkpoint: str = None,
+    device: str = None,
+    seed: int = 0,
+    verbose: int = 0,
+    preprocess: bool = True,
+    filter_min_counts: int = None,
+    drop_unlabelled: bool = False,
+):
+    """Stage 1: adapt if asked, then encode every section.
+
+    This is the expensive stage and the only one that touches the model.
+    It writes the three representations and the prototype assignment into
+    each section's AnnData, and returns everything the later stages need.
+
+    Nothing is clustered here and nothing is plotted. The prototype
+    assignment is not a clustering: it is the Level-2 attention argmax,
+    read straight from the forward pass.
+
+    Returns (sections, context) where context carries the trainer, the
+    gene graphs, the GRN attention, and the settings the later stages
+    need to stay consistent with this one.
+    """
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got '{mode}'")
+    if init not in INIT_MODES:
+        raise ValueError(f"init must be one of {INIT_MODES}, got '{init}'")
+    if grn and mode != "continual":
+        raise SystemExit(
+            f"grn requires mode='continual' (got '{mode}').\n\n"
+            "The GRN refinement layer is only trained during continual "
+            "adaptation. In zero-shot mode it is freshly initialised and "
+            "never optimised, so its attention carries no signal."
+        )
+
+    set_seed(seed)
+    os.makedirs(output_dir, exist_ok=True)
+    device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    if section_labels is None:
+        section_labels = [os.path.splitext(f)[0] for f in section_files]
+    elif len(section_labels) != len(section_files):
+        raise ValueError(
+            f"section_labels has {len(section_labels)} entries but "
+            f"section_files has {len(section_files)}"
+        )
+
+    sections = load_sections(
+        h5ad_files, vocab_path, preprocess=preprocess,
+        filter_min_counts=filter_min_counts, drop_unlabelled=drop_unlabelled,species=species,   
+    )
+    sections = align_sections(sections, data_dir, section_files)
+
+    # --- gene-interaction graphs -------------------------------------
+    # gene_names travels with its graph: attention is indexed by gene
+    # position, so the two must never be separated.
+    gene_graph, gene_names = None, None
+    gene_graph_list, gene_names_list = None, None
+
+    if grn:
+        print("\nBuilding gene-interaction graph")
+        if per_section_grn:
+            gene_graph_list, gene_names_list = [], []
+            for adata, section_file in zip(sections, section_files):
+                gg, gn, _ = build_hetero_grn(
+                    adata=adata, species=species, spearman_threshold=0.4,
+                    add_reverse_for_curated=True,
+                )
+                assert_graph_matches_pt(gn, data_dir, section_file)
+                gene_graph_list.append(gg)
+                gene_names_list.append(gn)
+        else:
+            gene_graph, gene_names, _ = build_hetero_grn(
+                adata=sections[0], species=species, spearman_threshold=0.4,
+                add_reverse_for_curated=True,
+            )
+            for section_file in section_files:
+                assert_graph_matches_pt(gene_names, data_dir, section_file)
+
+    # --- checkpoint --------------------------------------------------
+    if init in ("pretrained", "hybrid"):
+        if checkpoint_path is None:
+            raise ValueError(f"checkpoint_path is required when init='{init}'")
+        current_checkpoint = checkpoint_path
+    else:
+        current_checkpoint = create_random_checkpoint(
+            data_dir=data_dir, vocab_path=vocab_path,
+            output_checkpoint=os.path.join(output_dir, "hebi_random_init.pt"),
+            device=device, seed=seed,
+        )
+
+    # --- adaptation --------------------------------------------------
+    if mode == "continual":
+        adapted = output_checkpoint or os.path.join(output_dir,
+                                                    "hebi_continual.pt")
+        continual_adapt(
+            checkpoint_path=current_checkpoint, data_dir=data_dir,
+            vocab_path=vocab_path, device=device, lr=lr,
+            num_epochs=num_epochs, output_checkpoint=adapted,
+            gene_graph=gene_graph, gene_graph_list=gene_graph_list,
+            init=init, verbose=verbose,
+        )
+        current_checkpoint = adapted
+
+    # --- encode ------------------------------------------------------
+    trainer = load_hebi(
+        checkpoint_path=current_checkpoint, data_dir=data_dir,
+        vocab_path=vocab_path, device=device, init=init, use_grn=grn,
+    )
+
+    all_grn_attn, cell_counts = [], []
+    print(f"\nEncoding {len(section_files)} section(s)")
+
+    for i, (adata, section_file) in enumerate(zip(sections, section_files)):
+        graph_i = gene_graph_list[i] if gene_graph_list is not None else gene_graph
+        out = encode_section(
+            trainer=trainer,
+            section_path=os.path.join(data_dir, section_file),
+            gene_graph=graph_i,
+        )
+        adata.obsm["z0"] = out["z0"].cpu().numpy()
+        adata.obsm["z1"] = out["z1"].cpu().numpy()
+        adata.obsm["z2"] = out["z2"].cpu().numpy()
+        _set_cat(adata, KEY_PROTOTYPES, out["prototypes"].numpy())
+        all_grn_attn.append(out["grn_attention"])
+        cell_counts.append(adata.n_obs)
+
+    n_prototypes = trainer.num_prototypes_lvl2
+    used = len(np.unique(np.concatenate(
+        [a.obs[KEY_PROTOTYPES].astype(int).to_numpy() for a in sections])))
+    print(f"  {sum(cell_counts):,} cells encoded; "
+          f"{used}/{n_prototypes} prototypes in use")
+
+    context = {
+        "trainer": trainer,
+        "section_files": section_files,
+        "section_labels": section_labels,
+        "data_dir": data_dir,
+        "output_dir": output_dir,
+        "cell_counts": cell_counts,
+        "n_prototypes": n_prototypes,
+        "gene_graph": gene_graph,
+        "gene_names": gene_names,
+        "gene_graph_list": gene_graph_list,
+        "gene_names_list": gene_names_list,
+        "grn_attention": all_grn_attn,
+        "seed": seed,
+    }
+    return sections, context
+
+
+def cluster_sections(
+    sections,
+    context,
+    n_cell_clusters: int = 16,
+    n_composition_niches: int = None,
+    composition_neighbors: int = 200,
+    cluster_method: str = "kmeans",
+    resolution: float = 1.0,
+    cell_type_key: str = None,
+    niche_key: str = None,
+    save_plots: bool = True,
+    point_size: float = None,
+    output_dir: str = None,
+):
+    """Stage 2: cluster the representations that stage 1 produced.
+
+    Both clusterings are fitted once over all sections together, so a
+    label means the same thing everywhere. Running each section
+    separately would give labels that cannot be compared.
+
+    Labels are written under names carrying the setting that made them —
+    z0_kmeans_16, comp_niches_12 — so calling this again with different
+    numbers adds columns rather than replacing them, and the figures do
+    not overwrite each other.
+
+    Returns the names of the columns written.
+    """
+    if cluster_method not in CLUSTER_METHODS:
+        raise ValueError(f"cluster_method must be one of {CLUSTER_METHODS}")
+
+    output_dir = output_dir or context["output_dir"]
+    os.makedirs(output_dir, exist_ok=True)
+
+    seed = context["seed"]
+    counts = context["cell_counts"]
+    labels = context["section_labels"]
+    files = context["section_files"]
+
+    offsets, cursor = [], 0
+    for count in counts:
+        offsets.append(slice(cursor, cursor + count))
+        cursor += count
+
+    written = {}
+
+    # --- cell level --------------------------------------------------
+    cell_key = f"z0_{cluster_method}_{n_cell_clusters}"
+    print(f"\nCell-level clustering: {cluster_method}, "
+          f"k={n_cell_clusters}  ->  obs['{cell_key}']")
+
+    joint_z0 = np.concatenate([a.obsm["z0"] for a in sections], axis=0)
+    cell_labels = cluster_embedding(
+        joint_z0, n_clusters=n_cell_clusters, method=cluster_method,
+        random_state=seed, resolution=resolution,
+    )
+    for adata, sl in zip(sections, offsets):
+        _set_cat(adata, cell_key, cell_labels[sl])
+    written["cell_clusters"] = cell_key
+
+    # --- niche level -------------------------------------------------
+    niche_key_name = None
+    niche_labels = None
+    if n_composition_niches is not None:
+        niche_key_name = f"comp_niches_{n_composition_niches}"
+        print(f"Niche-level clustering: {n_composition_niches} niches from "
+              f"{composition_neighbors}-neighbour composition  ->  "
+              f"obs['{niche_key_name}']")
+
+        vectors = [
+            build_composition_vectors(
+                adata.obs[KEY_PROTOTYPES].astype(int).to_numpy(),
+                adata.obsm["spatial"],
+                k=composition_neighbors,
+                n_prototypes=context["n_prototypes"],
+            )
+            for adata in sections
+        ]
+        niche_labels = cluster_embedding(
+            np.concatenate(vectors, axis=0),
+            n_clusters=n_composition_niches, method="kmeans",
+            random_state=seed,
+        )
+        for adata, sl in zip(sections, offsets):
+            _set_cat(adata, niche_key_name, niche_labels[sl])
+        written["composition_niches"] = niche_key_name
+
+    # --- scores ------------------------------------------------------
+    print()
+    for i, (adata, name) in enumerate(zip(sections, files)):
+        edge_index = torch.load(
+            os.path.join(context["data_dir"], name), map_location="cpu",
+            weights_only=False,
+        )["edge_index"]
+        print(f"{labels[i]}")
+        for key, truth in ((cell_key, cell_type_key),
+                           (KEY_PROTOTYPES, niche_key),
+                           (niche_key_name, niche_key)):
+            if key is None or key not in adata.obs.columns:
+                continue
+            codes = adata.obs[key].cat.codes.to_numpy()
+            fide = fide_score(codes, edge_index)
+            ari, nmi = score_against_truth(adata, truth, key)
+            if np.isnan(ari):
+                print(f"  {key:<22} FIDE={fide:.4f}")
+            else:
+                print(f"  {key:<22} ARI={ari:.4f}  NMI={nmi:.4f}  "
+                      f"FIDE={fide:.4f}")
+
+    # --- figures -----------------------------------------------------
+    if save_plots:
+        print()
+        _plot_combined(
+            coords_list=[a.obsm["spatial"] for a in sections],
+            joint_labels=cell_labels, offsets=offsets, sections=sections,
+            section_names=labels, truth_key=cell_type_key, pred_key=cell_key,
+            palette=get_palette(cell_labels),
+            suptitle=f"Cell-level clusters on z0 "
+                     f"({cluster_method}, k={n_cell_clusters})",
+            legend_title="Cluster",
+            out_path=os.path.join(output_dir, cell_key),
+            point_size=point_size,
+        )
+        if niche_labels is not None:
+            _plot_combined(
+                coords_list=[a.obsm["spatial"] for a in sections],
+                joint_labels=niche_labels, offsets=offsets, sections=sections,
+                section_names=labels, truth_key=niche_key,
+                pred_key=niche_key_name, palette=get_palette(niche_labels),
+                suptitle=f"Composition niches (k={n_composition_niches}, "
+                         f"{composition_neighbors} neighbours)",
+                legend_title="Niche",
+                out_path=os.path.join(output_dir, niche_key_name),
+                point_size=point_size,
+            )
+
+    return written
+
+
+def analyse_grn(
+    sections,
+    context,
+    cluster_key: str,
+    top_k_edges: int = 5,
+    run_report: bool = True,
+    run_ccc: bool = True,
+    ccc_top_k_pairs: int = 8,
+    ccc_min_score_pct: float = 0.0,
+    ccc_top_n_edges: int = 20,
+    ccc_keep_saturated: bool = False,
+    ccc_min_edges: int = 100,
+    ccc_fdr: float = 0.05,
+    ccc_min_enrichment: float = 2.0,
+    output_dir: str = None,
+):
+    """Stage 3: what the learned gene-interaction attention says.
+
+    Three outputs. A heatmap of the strongest regulatory interactions in
+    each group of cells, and a chord diagram of ligand-receptor
+    communication between those same groups, both written once at the top
+    level. Then, per section, the full report: hub genes ranked by total
+    attention, edge salience corrected for how contested each target is,
+    and the underlying tables as CSV.
+
+    The per-section outputs go to <section>_plot/grn/. Set
+    run_report=False for the two summary figures alone.
+
+    cluster_key names the grouping: a discovered clustering from stage 2,
+    or any annotation column. The choice matters — interactions between
+    annotated cell types are a conventional analysis, while interactions
+    between discovered niches are what the model's representation adds.
+    """
+    attention = context["grn_attention"]
+    if not attention or all(a is None for a in attention):
+        raise SystemExit(
+            "No GRN attention available. Re-run encode_sections with "
+            "grn=True and mode='continual'."
+        )
+
+    output_dir = output_dir or context["output_dir"]
+    labels = context["section_labels"]
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\nGRN analysis, grouped by '{cluster_key}'")
+
+    # --- per-section regulatory activity ------------------------------
+    for i, adata in enumerate(sections):
+        if attention[i] is None:
+            print(f"  {labels[i]}: no attention, skipping")
+            continue
+        if cluster_key not in adata.obs.columns:
+            raise KeyError(
+                f"'{cluster_key}' not in obs for {labels[i]}. "
+                f"Available: {[c for c in adata.obs.columns][:15]}"
+            )
+
+        graph = (context["gene_graph_list"][i]
+                 if context["gene_graph_list"] is not None
+                 else context["gene_graph"])
+        names = (context["gene_names_list"][i]
+                 if context["gene_names_list"] is not None
+                 else context["gene_names"])
+
+        section_name = os.path.splitext(context["section_files"][i])[0]
+        grn_dir = os.path.join(output_dir, f"{section_name}_plot", "grn")
+        os.makedirs(grn_dir, exist_ok=True)
+
+        activity = niche_edge_activity(
+            adata=adata, gene_graph=graph, gene_names=names,
+            attention=attention[i], cluster_key=cluster_key,
+        )
+        activity.to_csv(os.path.join(grn_dir, "niche_edge_activity.csv"))
+
+        plot_top_edges_heatmap(
+            activity,
+            out_path=os.path.join(output_dir, f"grn_top{top_k_edges}_{labels[i]}"),
+            top_k=top_k_edges,
+            title=f"{labels[i]}: top {top_k_edges} interactions per "
+                  f"{cluster_key}",
+        )
+
+        if run_report:
+            # Hub genes, edge salience, and the per-cluster tables. These
+            # print heavily, so their output is folded into the files
+            # rather than the console.
+            run_grn_analysis(
+                adata=adata,
+                gene_graph=graph,
+                gene_names=names,
+                grn_attention=attention[i],
+                out_dir=grn_dir,
+                cluster_key=cluster_key,
+                prefix=section_name,
+                run_report=True,
+                run_plots=True,
+                run_ccc=False,     # communication is done once, below
+            )
+
+        print(f"  {labels[i]} -> {grn_dir}")
+
+    # --- communication ------------------------------------------------
+    if run_ccc:
+        print("\nCell-cell communication")
+        from hebi.grn.ccc import build_spatial_ccc_tensor
+
+        comm_dfs = []
+        for i, adata in enumerate(sections):
+            if attention[i] is None:
+                comm_dfs.append(None)
+                continue
+            graph = (context["gene_graph_list"][i]
+                     if context["gene_graph_list"] is not None
+                     else context["gene_graph"])
+            names = (context["gene_names_list"][i]
+                     if context["gene_names_list"] is not None
+                     else context["gene_names"])
+            # The spatial graph the model was trained on; align_sections has
+            # already put the AnnData in the .pt cell order.
+            edge_index = torch.load(
+                os.path.join(context["data_dir"], context["section_files"][i]),
+                map_location="cpu", weights_only=False)["edge_index"]
+            comm_dfs.append(build_spatial_ccc_tensor(
+                adata=adata, gene_graphs=graph, gene_names=names,
+                grn_attn_weights=attention[i], edge_index=edge_index,
+                cluster_key=cluster_key, min_edges=ccc_min_edges,
+            ))
+
+        write_ccc_excel(
+            comm_dfs=comm_dfs, section_labels=labels,
+            out_path=os.path.join(output_dir, "CCC_all_pairs.xlsx"),
+        )
+        plot_ccc_chord(
+            comm_dfs=comm_dfs, section_labels=labels,
+            out_path=os.path.join(output_dir, "ccc_chord"),
+            top_k_pairs=ccc_top_k_pairs, min_score_pct=ccc_min_score_pct,
+            top_n_edges=ccc_top_n_edges,
+            drop_saturated=not ccc_keep_saturated,
+            fdr_max=ccc_fdr,
+            min_enrichment=ccc_min_enrichment,
+        )
+
+
 def run_hebi(
     checkpoint_path: str,
     data_dir: str,
@@ -217,10 +675,12 @@ def run_hebi(
     per_section_grn: bool = False,
     grn_cluster_key: str = None,
     grn_ccc: bool = False,
+    grn_top_k_edges: int = 5,
+    grn_report: bool = True,
     section_labels=None,
-    ccc_top_k_pairs: int = 5,
-    ccc_min_score_pct: float = 0.15,
-    ccc_top_n_edges: int = 18,
+    ccc_top_k_pairs: int = 8,
+    ccc_min_score_pct: float = 0.0,
+    ccc_top_n_edges: int = 20,
     ccc_keep_saturated: bool = False,
     lr: float = 1e-4,
     num_epochs: int = 10,
@@ -228,330 +688,53 @@ def run_hebi(
     output_checkpoint: str = None,
     device: str = None,
     seed: int = 0,
+    verbose: int = 0,
     preprocess: bool = True,
     save_plots: bool = True,
     filter_min_counts: int = None,
     drop_unlabelled: bool = False,
     point_size: float = None,
 ):
-    """Encode sections and assign prototypes, cell clusters, and
-    composition niches.
+    """All three stages in order. This is what the command line calls.
 
-    Returns (sections, trainer, grn_attention_per_section).
+    Returns (sections, context). Call cluster_sections or analyse_grn on
+    the same objects afterwards to try other settings without re-encoding.
     """
-    if cluster_method not in CLUSTER_METHODS:
-        raise ValueError(f"cluster_method must be one of {CLUSTER_METHODS}")
-
-    if mode not in MODES:
-        raise ValueError(
-            f"mode must be one of {MODES}, got '{mode}'. "
-            "Values from a config file are not checked by argparse, so a "
-            "typo there reaches this point unvalidated."
-        )
-
-    if init not in INIT_MODES:
-        raise ValueError(f"init must be one of {INIT_MODES}, got '{init}'")
-
-    if grn and mode != "continual":
-        raise SystemExit(
-            f"--grn requires --mode continual (got '{mode}').\n\n"
-            "The GRN refinement layer is only trained during continual "
-            "adaptation. In zero-shot mode it is freshly initialised and "
-            "never optimised, so its attention carries no signal and every "
-            "gene-level result derived from it — hub genes, edge salience, "
-            "niche activity, cell-cell communication — would be meaningless.\n\n"
-            "Set mode to continual, or drop --grn."
-        )
-
-    set_seed(seed)
-    os.makedirs(output_dir, exist_ok=True)
-    device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
-
-    if section_labels is None:
-        section_labels = [os.path.splitext(f)[0] for f in section_files]
-    elif len(section_labels) != len(section_files):
-        raise ValueError(
-            f"section_labels has {len(section_labels)} entries but "
-            f"section_files has {len(section_files)}"
-        )
-
-    print(f"HEBI pipeline | mode={mode} | init={init} | cluster={cluster_method}")
-
-    sections = load_sections(
-        h5ad_files,
-        vocab_path,
-        preprocess=preprocess,
-        filter_min_counts=filter_min_counts,
-        drop_unlabelled=drop_unlabelled,
+    sections, context = encode_sections(
+        checkpoint_path=checkpoint_path, data_dir=data_dir,
+        section_files=section_files, h5ad_files=h5ad_files,
+        vocab_path=vocab_path, mode=mode, init=init,
+        section_labels=section_labels, grn=grn, species=species,
+        per_section_grn=per_section_grn, lr=lr, num_epochs=num_epochs,
+        output_dir=output_dir, output_checkpoint=output_checkpoint,
+        device=device, seed=seed, verbose=verbose, preprocess=preprocess,
+        filter_min_counts=filter_min_counts, drop_unlabelled=drop_unlabelled,
     )
-    sections = align_sections(sections, data_dir, section_files)
 
-    # --- gene-interaction graphs -------------------------------------
-    # gene_names travels with its graph: attention is indexed by gene
-    # position, so the two must never be separated.
-    gene_graph, gene_names = None, None
-    gene_graph_list, gene_names_list = None, None
+    written = cluster_sections(
+        sections, context,
+        n_cell_clusters=n_cell_clusters,
+        n_composition_niches=n_composition_niches,
+        composition_neighbors=composition_neighbors,
+        cluster_method=cluster_method, resolution=resolution,
+        cell_type_key=cell_type_key, niche_key=niche_key,
+        save_plots=save_plots, point_size=point_size,
+    )
 
     if grn:
-        if per_section_grn:
-            gene_graph_list, gene_names_list = [], []
-            for adata in sections:
-                gg, gn, _ = build_hetero_grn(
-                    adata=adata,
-                    species=species,
-                    spearman_threshold=0.4,
-                    add_reverse_for_curated=True,
-                )
-                gene_graph_list.append(gg)
-                gene_names_list.append(gn)
-        else:
-            print("Building gene-interaction graph")
-            gene_graph, gene_names, _ = build_hetero_grn(
-                adata=sections[0],
-                species=species,
-                spearman_threshold=0.4,
-                add_reverse_for_curated=True,
-            )
-
-    # --- checkpoint --------------------------------------------------
-    if init in ("pretrained", "hybrid"):
-        if checkpoint_path is None:
-            raise ValueError(f"checkpoint_path is required when init='{init}'")
-        current_checkpoint = checkpoint_path
-    else:
-        current_checkpoint = create_random_checkpoint(
-            data_dir=data_dir,
-            vocab_path=vocab_path,
-            output_checkpoint="hebi_random_init_temp.pt",
-            device=device,
-            seed=seed,
-        )
-        print("Starting from random initialisation")
-
-    # --- optional continual adaptation -------------------------------
-    if mode == "continual":
-        adapted = output_checkpoint or os.path.join(output_dir, "hebi_continual.pt")
-        continual_adapt(
-            checkpoint_path=current_checkpoint,
-            data_dir=data_dir,
-            vocab_path=vocab_path,
-            device=device,
-            lr=lr,
-            num_epochs=num_epochs,
-            output_checkpoint=adapted,
-            gene_graph=gene_graph,
-            gene_graph_list=gene_graph_list,
-            init=init,
-        )
-        current_checkpoint = adapted
-
-    # --- encode ------------------------------------------------------
-    trainer = load_hebi(
-        checkpoint_path=current_checkpoint,
-        data_dir=data_dir,
-        vocab_path=vocab_path,
-        device=device,
-        init=init,
-        use_grn=grn,
-    )
-
-    all_z0, all_z2, all_protos, all_grn_attn, cell_counts = [], [], [], [], []
-
-    for i, section_file in enumerate(section_files):
-        graph_i = gene_graph_list[i] if gene_graph_list is not None else gene_graph
-        out = encode_section(
-            trainer=trainer,
-            section_path=os.path.join(data_dir, section_file),
-            gene_graph=graph_i,
-        )
-        all_z0.append(out["z0"].cpu().numpy())
-        all_z2.append(out["z2"].cpu().numpy())
-        all_protos.append(out["prototypes"].numpy())
-        all_grn_attn.append(out["grn_attention"])
-        cell_counts.append(all_z0[-1].shape[0])
-        print(f"  Encoded {section_file}: {cell_counts[-1]} cells")
-
-    joint_z0 = np.concatenate(all_z0, axis=0)
-    joint_protos = np.concatenate(all_protos, axis=0)
-
-    n_prototypes = int(joint_protos.max()) + 1
-    n_used = len(np.unique(joint_protos))
-    print(f"\nTotal cells: {joint_z0.shape[0]}")
-    print(f"Prototypes in use: {n_used}/{n_prototypes}")
-
-    # --- cell clusters, fitted jointly across sections ---------------
-    print(f"Clustering cell-level z0 with {cluster_method} (k={n_cell_clusters})")
-    joint_cell_labels = cluster_embedding(
-        joint_z0,
-        n_clusters=n_cell_clusters,
-        method=cluster_method,
-        random_state=seed,
-        resolution=resolution,
-    )
-
-    # --- composition niches, one joint fit ---------------------------
-    joint_comp_niches = None
-    if n_composition_niches is not None:
-        comp_vectors = [
-            build_composition_vectors(
-                all_protos[i],
-                sections[i].obsm["spatial"],
-                k=composition_neighbors,
-                n_prototypes=n_prototypes,
-            )
-            for i in range(len(sections))
-        ]
-        joint_comp_niches = cluster_embedding(
-            np.concatenate(comp_vectors, axis=0),
-            n_clusters=n_composition_niches,
-            method="kmeans",
-            random_state=seed,
-        )
-        print(f"Composition niches: {len(np.unique(joint_comp_niches))}")
-
-    # Palettes are built over the joint labels so a colour means the same
-    # thing in every section's figure.
-    palette_clusters = get_palette(joint_cell_labels)
-    palette_comp = (
-        get_palette(joint_comp_niches) if joint_comp_niches is not None else None
-    )
-
-    section_names = [os.path.splitext(f)[0] for f in section_files]
-    coords_list = [a.obsm["spatial"] for a in sections]
-    offsets, _cursor = [], 0
-    for count in cell_counts:
-        offsets.append(slice(_cursor, _cursor + count))
-        _cursor += count
-
-    comm_dfs = []
-
-    # --- write labels back, plot, score ------------------------------
-    start = 0
-    for i, (adata, count) in enumerate(zip(sections, cell_counts)):
-        sl = slice(start, start + count)
-
-        adata.obsm["z0"] = all_z0[i]
-        adata.obsm["z2"] = all_z2[i]
-        _set_cat(adata, KEY_CELL_CLUSTERS, joint_cell_labels[sl])
-        _set_cat(adata, KEY_PROTOTYPES, all_protos[i])
-
-        if joint_comp_niches is not None:
-            _set_cat(adata, KEY_COMPOSITION_NICHES, joint_comp_niches[sl])
-
-        section_name = os.path.splitext(section_files[i])[0]
-        section_dir = os.path.join(output_dir, f"{section_name}_plot")
-
-        if save_plots:
-            os.makedirs(section_dir, exist_ok=True)
-            coords = adata.obsm["spatial"]
-
-            plot_spatial_labels(
-                coords,
-                joint_cell_labels[sl],
-                title=f"{section_name}\ncell clusters ({cluster_method}, k={n_cell_clusters})",
-                out_path=os.path.join(section_dir, "cell_clusters_z0"),
-                palette=palette_clusters,
-                legend_title="Cluster",
-                point_size=point_size,
-            )
-
-            if joint_comp_niches is not None:
-                plot_spatial_labels(
-                    coords,
-                    joint_comp_niches[sl],
-                    title=f"{section_name}\ncomposition niches (k={n_composition_niches})",
-                    out_path=os.path.join(section_dir, "composition_niches"),
-                    palette=palette_comp,
-                    legend_title="Niche",
-                    point_size=point_size,
-                )
-
-            print(f"  Figures -> {section_dir}")
-
-        if grn:
-            grn_dir = os.path.join(section_dir, "grn")
-            names_i = (
-                gene_names_list[i] if gene_names_list is not None else gene_names
-            )
-            graph_i = (
-                gene_graph_list[i] if gene_graph_list is not None else gene_graph
-            )
-            key = grn_cluster_key or _default_grn_key(adata)
-            print(f"\nGRN analysis for {section_name} (grouped by '{key}')")
-            grn_out = run_grn_analysis(
-                adata=adata,
-                gene_graph=graph_i,
-                gene_names=names_i,
-                grn_attention=all_grn_attn[i],
-                out_dir=grn_dir,
-                cluster_key=key,
-                prefix=section_name,
-                run_ccc=grn_ccc,
-            )
-            comm_dfs.append(grn_out.get("communication"))
-
-        edge_index = torch.load(
-            os.path.join(data_dir, section_files[i]), map_location="cpu"
-        )["edge_index"]
-
-        _report(adata, section_files[i], i, edge_index, cell_type_key, niche_key)
-        start += count
-
-    # --- combined figures, all sections side by side -----------------
-    if save_plots:
-        print("\nCombined figures:")
-        _plot_combined(
-            coords_list=coords_list,
-            joint_labels=joint_cell_labels,
-            offsets=offsets,
-            sections=sections,
-            section_names=section_names,
-            truth_key=cell_type_key,
-            pred_key=KEY_CELL_CLUSTERS,
-            palette=palette_clusters,
-            suptitle=f"HEBI joint cell clusters on z0 "
-                     f"({cluster_method}, k={n_cell_clusters})",
-            legend_title="Cluster",
-            out_path=os.path.join(output_dir, "joint_cell_clusters_z0"),
-            point_size=point_size,
+        key = grn_cluster_key or written.get(
+            "composition_niches", written["cell_clusters"])
+        analyse_grn(
+            sections, context, cluster_key=key,
+            top_k_edges=grn_top_k_edges, run_report=grn_report,
+            run_ccc=grn_ccc,
+            ccc_top_k_pairs=ccc_top_k_pairs,
+            ccc_min_score_pct=ccc_min_score_pct,
+            ccc_top_n_edges=ccc_top_n_edges,
+            ccc_keep_saturated=ccc_keep_saturated,
         )
 
-        if joint_comp_niches is not None:
-            _plot_combined(
-                coords_list=coords_list,
-                joint_labels=joint_comp_niches,
-                offsets=offsets,
-                sections=sections,
-                section_names=section_names,
-                truth_key=niche_key,
-                pred_key=KEY_COMPOSITION_NICHES,
-                palette=palette_comp,
-                suptitle=f"HEBI composition niches "
-                         f"(k={n_composition_niches})",
-                legend_title="Niche",
-                out_path=os.path.join(output_dir, "joint_composition_niches"),
-                point_size=point_size,
-            )
-
-    if grn and grn_ccc and comm_dfs:
-        print("\nCell-cell communication:")
-        write_ccc_excel(
-            comm_dfs=comm_dfs,
-            section_labels=section_labels,
-            out_path=os.path.join(output_dir, "CCC_all_pairs.xlsx"),
-        )
-        if save_plots:
-            plot_ccc_chord(
-                comm_dfs=comm_dfs,
-                section_labels=section_labels,
-                out_path=os.path.join(output_dir, "ccc_chord"),
-                top_k_pairs=ccc_top_k_pairs,
-                min_score_pct=ccc_min_score_pct,
-                top_n_edges=ccc_top_n_edges,
-                drop_saturated=not ccc_keep_saturated,
-            )
-
-    return sections, trainer, all_grn_attn
+    return sections, context
 
 
 def _plot_combined(
@@ -580,40 +763,9 @@ def _plot_combined(
     )
 
 
-def _default_grn_key(adata):
-    """Group GRN activity by niche, per the Methods. Composition niches are
-    the niche definition; fall back to cell clusters when they were not
-    computed."""
-    if KEY_COMPOSITION_NICHES in adata.obs.columns:
-        return KEY_COMPOSITION_NICHES
-    return KEY_CELL_CLUSTERS
-
-
 def _set_cat(adata, key, values):
     adata.obs[key] = np.asarray(values).astype(str)
     adata.obs[key] = adata.obs[key].astype("category")
-
-
-def _report(adata, name, index, edge_index, cell_type_key, niche_key):
-    print(f"\nSection {index + 1} [{name}]")
-
-    pairs = [
-        (KEY_CELL_CLUSTERS, cell_type_key),
-        (KEY_PROTOTYPES, niche_key),
-        (KEY_COMPOSITION_NICHES, niche_key),
-    ]
-
-    for pred_key, truth_key in pairs:
-        if pred_key not in adata.obs.columns:
-            continue
-        codes = adata.obs[pred_key].cat.codes.to_numpy()
-        fide = fide_score(codes, edge_index)
-        ari, nmi = score_against_truth(adata, truth_key, pred_key)
-
-        if np.isnan(ari):
-            print(f"  {pred_key:<20} FIDE={fide:.4f}")
-        else:
-            print(f"  {pred_key:<20} ARI={ari:.4f}  NMI={nmi:.4f}  FIDE={fide:.4f}")
 
 
 def build_parser():
@@ -671,6 +823,11 @@ def build_parser():
     p.add_argument("--grn_cluster_key", type=str, default=None,
                    help="adata.obs column to group GRN activity and CCC by. "
                         "Defaults to composition_niches, else cell_clusters.")
+    p.add_argument("--no_grn_report", action="store_true",
+                   help="Skip the per-section hub-gene and salience report, "
+                        "leaving only the heatmap and the chord diagram.")
+    p.add_argument("--grn_top_k_edges", type=int, default=5,
+                   help="Interactions per group shown in the GRN heatmap.")
     p.add_argument("--grn_ccc", action="store_true",
                    help="Also run cell-cell communication. Writes one figure "
                         "per sender niche, so this can be many files.")
@@ -678,12 +835,12 @@ def build_parser():
                    help="Display name per section, in the same order as "
                         "--section_files. Used for Excel sheet names and "
                         "figure panel titles. Defaults to the .pt filenames.")
-    p.add_argument("--ccc_top_k_pairs", type=int, default=5,
+    p.add_argument("--ccc_top_k_pairs", type=int, default=8,
                    help="Ligand-receptor pairs kept in the chord diagram.")
-    p.add_argument("--ccc_min_score_pct", type=float, default=0.15,
+    p.add_argument("--ccc_min_score_pct", type=float, default=0.0,
                    help="Keep links scoring at least this fraction of the "
                         "strongest link.")
-    p.add_argument("--ccc_top_n_edges", type=int, default=18,
+    p.add_argument("--ccc_top_n_edges", type=int, default=20,
                    help="Cap on links drawn per panel. 0 for no cap.")
     p.add_argument("--ccc_keep_saturated", action="store_true",
                    help="Keep edges with attention exactly 1.0. These are "
@@ -702,6 +859,9 @@ def build_parser():
     p.add_argument("--output_checkpoint", type=str, default=None)
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--verbose", action="store_true",
+                   help="Print per-slide progress during continual "
+                        "adaptation. Off by default: one line per epoch.")
     p.add_argument("--point_size", type=float, default=None,
                    help="Scatter point size. Chosen automatically from cell "
                         "count when omitted.")
@@ -766,6 +926,8 @@ def main(argv=None):
         species=args.species,
         per_section_grn=args.per_section_grn,
         grn_cluster_key=args.grn_cluster_key,
+        grn_top_k_edges=args.grn_top_k_edges,
+        grn_report=not args.no_grn_report,
         grn_ccc=args.grn_ccc,
         section_labels=args.section_labels,
         ccc_top_k_pairs=args.ccc_top_k_pairs,
@@ -778,6 +940,7 @@ def main(argv=None):
         output_checkpoint=args.output_checkpoint,
         device=args.device,
         seed=args.seed,
+        verbose=1 if args.verbose else 0,
         preprocess=not args.no_preprocess,
         save_plots=not args.no_plots,
         filter_min_counts=args.filter_min_counts,

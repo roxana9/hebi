@@ -10,26 +10,67 @@ import json
 import numpy as np
 def map_to_human(gene_list, species="mouse"):
     """
-    Map gene names from mouse/rat/etc. to human HGNC symbols.
+    Map gene symbols from mouse, rat, or another species to human HGNC
+    symbols via HomoloGene.
+
+    Two lookups are needed. The homologene field gives [taxid, entrez_id]
+    pairs, so the human entries yield entrez IDs rather than symbols; a
+    second query converts those IDs to symbols.
+
+    Genes with no homolog are absent from the returned mapping, and the
+    caller falls back to upper-casing the original symbol.
     """
     mg = mygene.MyGeneInfo()
     res = mg.querymany(
         gene_list,
         scopes="symbol",
         fields="homologene",
-        species=species
+        species=species,
+        verbose=False,
     )
-    
-    mapping = {}
+
+    # query symbol -> human entrez id
+    query_to_entrez = {}
     for r in res:
-        if "notfound" in r and r["notfound"]:
+        if r.get("notfound"):
             continue
-        if "homologene" in r:
-            # pick human homolog if exists
-            homs = r["homologene"]["genes"]
-            for sp_id, symbol in homs:
-                if sp_id == 9606:   # human NCBI taxon ID
-                    mapping[r["query"]] = symbol.upper()
+        homologene = r.get("homologene")
+        if not homologene:
+            continue
+        for entry in homologene.get("genes", []):
+            if len(entry) == 2 and entry[0] == 9606:   # human taxon
+                query_to_entrez[r["query"]] = entry[1]
+                break
+
+    if not query_to_entrez:
+        return {}
+
+    # human entrez id -> human symbol
+    entrez_ids = sorted(set(query_to_entrez.values()))
+    sym_res = mg.querymany(
+        entrez_ids,
+        scopes="entrezgene",
+        fields="symbol",
+        species="human",
+        verbose=False,
+    )
+
+    entrez_to_symbol = {}
+    for r in sym_res:
+        if r.get("notfound"):
+            continue
+        symbol = r.get("symbol")
+        if isinstance(symbol, str):
+            entrez_to_symbol[int(r["query"])] = symbol.upper()
+
+    mapping = {
+        query: entrez_to_symbol[entrez]
+        for query, entrez in query_to_entrez.items()
+        if entrez in entrez_to_symbol
+    }
+
+    print(f"  homolog mapping: {len(mapping)}/{len(gene_list)} genes mapped "
+          f"to human symbols")
     return mapping
 def harmonise_adata(adata,vocab_path=None,  species="human"):
     # pick source gene names

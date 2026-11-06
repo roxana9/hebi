@@ -497,6 +497,244 @@ class FeatureTransformerL2(nn.Module):
 
         h_final = self.fc_out(h_lower)
         return h_final,final_attn_probs
+# =====================================================================
+# Community-anchored hierarchy (HDSE-style Levels 1 and 2)
+#
+# Level 1: keys/values are the METIS communities of the current section,
+#   represented by the mean of their cells; logits add log(n_c) and a
+#   non-positive distance slope w1 * D[a_i, c] (HDSE, Luo et al. 2024).
+# Level 2: communities are assigned to K2 shared niche prototypes by their
+#   content; distance cell -> niche k = min distance to a community assigned
+#   to k; niches with no community in the batch are masked.
+# No community index is ever paired with a prototype index, so outputs do not
+# depend on the METIS numbering.
+# =====================================================================
+FAR_DISTANCE = 30
+
+
+def nonpositive_slope(theta: Tensor, rate: float) -> Tensor:
+    """w = -softplus(rate * theta). `rate` makes Adam move w `rate` times
+    faster than the other weights without touching the optimiser."""
+    return -F.softplus(theta * rate)
+
+
+def init_slope_theta(n: int, w_init: float, rate: float) -> nn.Parameter:
+    z0 = math.log(math.expm1(-w_init))          # softplus(z0) = -w_init
+    return nn.Parameter(torch.full((n,), z0 / rate))
+
+
+class CommunityTransformerL1(nn.Module):
+    """Level 1: cells attend to the communities of their section."""
+
+    def __init__(self, in_channels, hidden_channels, out_channels, heads,
+                 num_layers, ff_dropout, attn_dropout,
+                 slope_init: float = -0.1, slope_rate: float = 30.0, **kwargs):
+        super().__init__()
+        if hidden_channels % heads != 0:
+            raise ValueError("hidden_channels must be divisible by heads")
+        self.hidden_channels = hidden_channels
+        self.heads = heads
+        self.num_layers = num_layers
+        self.dropout = attn_dropout
+        self.slope_rate = slope_rate
+
+        self.fc_in = nn.Sequential(nn.Linear(in_channels, hidden_channels),
+                                   nn.LayerNorm(hidden_channels), nn.ReLU())
+        self.lin_k = nn.Linear(hidden_channels, hidden_channels)
+        self.lin_v = nn.Linear(hidden_channels, hidden_channels)
+        self.dist_theta = init_slope_theta(heads, slope_init, slope_rate)
+
+        self.lin_q_layers = nn.ModuleList()
+        self.ffs = nn.ModuleList()
+        self.norms_1 = nn.ModuleList()
+        self.norms_2 = nn.ModuleList()
+        for _ in range(num_layers):
+            self.lin_q_layers.append(Linear(hidden_channels, hidden_channels))
+            self.ffs.append(nn.Sequential(
+                nn.Linear(hidden_channels, hidden_channels * 2), nn.ReLU(),
+                nn.Dropout(ff_dropout), nn.Linear(hidden_channels * 2, hidden_channels)))
+            self.norms_1.append(nn.LayerNorm(hidden_channels))
+            self.norms_2.append(nn.LayerNorm(hidden_channels))
+        self.fc_out = nn.Linear(hidden_channels, out_channels)
+
+    @property
+    def slope(self) -> Tensor:
+        return nonpositive_slope(self.dist_theta, self.slope_rate)
+
+    def community_reps(self, h: Tensor, node2comm: Tensor, n_comm: int):
+        """Mean of h over the cells of each community, and the cell counts."""
+        idx = node2comm.long()
+        count = torch.bincount(idx, minlength=n_comm).to(h.dtype)
+        sums = torch.zeros(n_comm, h.size(1), device=h.device, dtype=h.dtype)
+        sums.index_add_(0, idx, h)
+        return sums / count.clamp(min=1).unsqueeze(1), count
+
+    def forward(self, x_lower: Tensor, node2comm_batch: Tensor,
+                super_sp_global: Tensor, global_reps=None):
+        """global_reps: optional (reps, counts) computed over the whole
+        section (used at encoding so outputs do not depend on batching).
+
+        Returns z1 [bs, out] and a dict with the community representations
+        (reps, present mask) and the cell-to-community distances d [bs, n_comm]
+        that Level 2 needs."""
+        H, C = self.heads, self.hidden_channels // self.heads
+        N = x_lower.size(0)
+        n_comm = super_sp_global.size(0)
+
+        h = self.fc_in(x_lower)
+        if global_reps is not None:
+            reps, count = global_reps
+        else:
+            reps, count = self.community_reps(h, node2comm_batch, n_comm)
+
+        k = self.lin_k(reps).view(n_comm, H, C).permute(1, 2, 0)        # [H, C, n_comm]
+        v = self.lin_v(reps).view(n_comm, H, C).permute(1, 0, 2)        # [H, n_comm, C]
+        log_n = torch.log(count).view(1, 1, n_comm)                     # -inf = absent
+        d = super_sp_global[node2comm_batch.long(), :].float()
+        d = torch.nan_to_num(d, nan=FAR_DISTANCE, posinf=FAR_DISTANCE).clamp(0, FAR_DISTANCE)
+        dist_bias = self.slope.view(H, 1, 1) * d.unsqueeze(0)           # [H, bs, n_comm]
+
+        for i in range(self.num_layers):
+            res = h
+            q = self.lin_q_layers[i](h).view(N, H, C).permute(1, 0, 2)
+            attn = (torch.matmul(q, k) / math.sqrt(C) + log_n + dist_bias).softmax(dim=-1)
+            attn = F.dropout(attn, p=self.dropout, training=self.training)
+            out = torch.matmul(attn, v).permute(1, 0, 2).contiguous().view(N, H * C)
+            h = self.norms_1[i](res + out)
+            h = self.norms_2[i](h + self.ffs[i](h))
+
+        aux = {"reps": reps, "present": count > 0, "d": d}
+        return self.fc_out(h), aux
+
+
+class CommunityPoolerL2(nn.Module):
+    """Assigns the communities present in the batch to K2 niche prototypes."""
+
+    def __init__(self, in_channels: int, num_l2_prototypes: int,
+                 context_scale: float = 0.5, grad_scale: float = 0.1, **kwargs):
+        super().__init__()
+        self.num_l2_prototypes = num_l2_prototypes
+        self.context_scale = context_scale
+        self.grad_scale = grad_scale            # gradient from the pooler into L0/L1
+        self.pool_mlp = nn.Sequential(nn.Linear(in_channels, in_channels), nn.ReLU(),
+                                      nn.Linear(in_channels, num_l2_prototypes))
+        self.l2_prototypes = nn.Parameter(torch.randn(num_l2_prototypes, in_channels) * 0.1)
+
+    def forward(self, community_reps: Tensor):
+        """community_reps: [P', D], the communities present in the batch.
+        Returns niche prototypes C_L2 [K2, D] and assignment S [P', K2]."""
+        c = community_reps
+        if self.grad_scale != 1.0:
+            c = self.grad_scale * c + (1.0 - self.grad_scale) * c.detach()
+
+        logits = self.pool_mlp(c)
+        if self.training:
+            s_soft = F.softmax(logits / 0.5, dim=-1)
+            s_hard = torch.zeros_like(s_soft).scatter_(1, s_soft.argmax(1, keepdim=True), 1.0)
+            S = s_hard - s_soft.detach() + s_soft                     # straight-through
+        else:
+            S = F.softmax(logits / 0.1, dim=-1)
+
+        # mean of the (normalised) communities assigned to each niche;
+        # count clamped at 1 so an empty niche gets zero context, not 0/eps
+        context = (S.t() @ F.normalize(c, dim=-1)) / S.sum(0).clamp(min=1.0).unsqueeze(1)
+        return self.l2_prototypes + self.context_scale * context, S
+
+
+def niche_distances(d_present: Tensor, S: Tensor, far: float = FAR_DISTANCE):
+    """d_present: [bs, P'] cell-to-community distances for the communities in
+    S. Returns [bs, K2] distance to the nearest community assigned to each
+    niche, and a [K2] bool mask of niches with no community."""
+    niche = S.argmax(dim=1).detach()                                    # [P']
+    K2 = S.size(1)
+    out = torch.full((d_present.size(0), K2), float(far), device=d_present.device)
+    out.scatter_reduce_(1, niche.unsqueeze(0).expand(d_present.size(0), -1).contiguous(),
+                        d_present, reduce="amin", include_self=True)
+    absent = torch.bincount(niche, minlength=K2) == 0
+    return out, absent
+
+
+class NicheTransformerL2(nn.Module):
+    """Level 2: cells attend to the niche prototypes, with a non-positive
+    distance slope on the cell-to-niche distance."""
+
+    def __init__(self, in_channels, hidden_channels, out_channels, heads,
+                 num_layers, ff_dropout, attn_dropout,
+                 slope_init: float = -0.1, slope_rate: float = 10.0, **kwargs):
+        super().__init__()
+        self.hidden_channels = hidden_channels
+        self.heads = heads
+        self.num_layers = num_layers
+        self.dropout = attn_dropout
+        self.slope_rate = slope_rate
+
+        self.fc_in = nn.Sequential(nn.Linear(in_channels, hidden_channels),
+                                   nn.LayerNorm(hidden_channels), nn.ReLU())
+        self.dist_theta = init_slope_theta(heads, slope_init, slope_rate)
+        self.temperature = nn.Parameter(torch.tensor(1.0))
+
+        self.lin_q_layers = nn.ModuleList()
+        self.ffs = nn.ModuleList()
+        self.norms_1 = nn.ModuleList()
+        self.norms_2 = nn.ModuleList()
+        for _ in range(num_layers):
+            self.lin_q_layers.append(Linear(hidden_channels, hidden_channels))
+            self.ffs.append(nn.Sequential(
+                nn.Linear(hidden_channels, hidden_channels * 2), nn.ReLU(),
+                nn.Dropout(ff_dropout), nn.Linear(hidden_channels * 2, hidden_channels)))
+            self.norms_1.append(nn.LayerNorm(hidden_channels))
+            self.norms_2.append(nn.LayerNorm(hidden_channels))
+        self.fc_out = nn.Linear(hidden_channels, out_channels)
+
+    @property
+    def slope(self) -> Tensor:
+        
+        return nonpositive_slope(self.dist_theta, self.slope_rate).clamp(min=-1.0)
+
+    def forward(self, x_lower: Tensor, c_l2_prototypes: Tensor,
+                niche_dist: Tensor, niche_absent: Tensor):
+        H, C = self.heads, self.hidden_channels // self.heads
+        N = x_lower.size(0)
+        K2 = c_l2_prototypes.size(0)
+
+        h = self.fc_in(x_lower)
+        p = F.normalize(c_l2_prototypes, dim=-1)
+        k = p.view(K2, H, C).permute(1, 2, 0)
+        v = p.view(K2, H, C).permute(1, 0, 2)
+        dist_bias = self.slope.view(H, 1, 1) * niche_dist.unsqueeze(0)  # [H, bs, K2]
+        absent = niche_absent.view(1, 1, K2)
+
+        final = None
+        for i in range(self.num_layers):
+            res = h
+            q = self.lin_q_layers[i](h).view(N, H, C).permute(1, 0, 2)
+            scores = (torch.matmul(q, k) / math.sqrt(C) + dist_bias) \
+                * self.temperature.clamp(min=0.1, max=10.0)
+            # mask after the temperature product: inside it, d(loss)/dT would
+            # contain 0 * (-inf) = NaN
+            scores = scores.masked_fill(absent, float("-inf"))
+            attn = scores.softmax(dim=-1)
+            if i == self.num_layers - 1:
+                final = attn.mean(dim=0)
+            attn = F.dropout(attn, p=self.dropout, training=self.training)
+            out = torch.matmul(attn, v).permute(1, 0, 2).contiguous().view(N, H * C)
+            h = self.norms_1[i](res + out)
+            h = self.norms_2[i](h + self.ffs[i](h))
+        return self.fc_out(h), final
+
+
+def hierarchy_forward(model_lvl1, pooler_lvl2, model_lvl2, z0_batch,
+                      node2comm_batch, super_sp, global_reps=None):
+    """Levels 1 and 2 for one batch, shared by training and encoding.
+    Returns z1, z2, niche attention [bs, K2], and S [P', K2]."""
+    z1, aux = model_lvl1(z0_batch, node2comm_batch, super_sp, global_reps=global_reps)
+    present = aux["present"]
+    C_L2, S = pooler_lvl2(aux["reps"][present])
+    dist, absent = niche_distances(aux["d"][:, present], S)
+    z2, attn = model_lvl2(z1, C_L2, dist, absent)
+    return z1, z2, attn, S
+
+
 # --- 5. Decoders (No Changes) ---
 class GlobalMLPDecoder(nn.Module):
     """ Simple MLP decoder to reconstruct X from Z2 """

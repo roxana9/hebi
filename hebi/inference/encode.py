@@ -19,6 +19,8 @@ from torch_geometric.utils import subgraph
 
 from hebi.data.sampler import LocalSampler
 from hebi.training.pretrain import Train
+import hebi.training.pretrain as _pretrain   # GRN_FEEDS_MAIN_PATH, read at call time
+from hebi.model.hebi import hierarchy_forward
 from hebi.model.grn_layer import GRNRefinementLayer
 
 EMBED_DIM = 128
@@ -45,7 +47,9 @@ def load_hebi(
     """
     state = torch.load(checkpoint_path, map_location=device)
 
-    n_proto_l1 = state["model_lvl1"]["prototypes"].shape[0]
+    # Level 1 has no prototype bank any more (keys are the communities of each
+    # section); the count is kept only for the Train constructor.
+    n_proto_l1 = 1024
     try:
         n_proto_l2 = state["pooler_lvl2"]["l2_prototypes"].shape[0]
     except (KeyError, IndexError):
@@ -115,6 +119,47 @@ def load_hebi(
     return trainer
 
 
+def _gene_embedding(trainer, gene_graph, device, return_attention=False):
+    gene_emb = trainer.gene_embedder(trainer.gene_ids.to(device))
+    gene_emb = trainer.gene_linear(gene_emb)
+    gene_emb = torch.nn.functional.normalize(gene_emb, dim=1, p=2)
+    attn = None
+    if (gene_graph is not None and "global" in gene_graph
+            and getattr(trainer, "grn_layer", None) is not None):
+        refined, attn = trainer.grn_layer(
+            gene_emb=gene_emb,
+            edge_index_grn=gene_graph["global"].edge_index.to(device),
+            return_attention=True,
+        )
+        if _pretrain.GRN_FEEDS_MAIN_PATH:     # else: attention only, encoder input unchanged
+            gene_emb = refined
+    return (gene_emb, attn) if return_attention else gene_emb
+
+
+@torch.no_grad()
+def section_community_reps(trainer, gene_graph=None):
+    """First encoding pass: Level-1 input fc_in(z0) for every cell of the
+    loaded section, averaged per community. Using these whole-section means
+    for every batch makes the output independent of how cells are batched."""
+    device = trainer.device
+    gene_emb = _gene_embedding(trainer, gene_graph, device)
+    m1 = trainer.model_lvl1
+    n_comm = trainer.super_sp_fixed.size(0)
+    sums = torch.zeros(n_comm, m1.hidden_channels, device=device)
+    count = torch.zeros(n_comm, device=device)
+    sampler = LocalSampler(trainer.edge_index.cpu(), sizes=[20, 10],
+                           num_nodes=trainer.X.size(0), batch_size=trainer.batch_size,
+                           num_workers=trainer.num_workers, shuffle=False)
+    for edge_block, node_idx_b, bs in sampler:
+        x_proj = trainer.X[node_idx_b].to(device) @ gene_emb
+        edge_attr_b = (edge_block[2].to(device), edge_block[3].to(device))
+        z0 = trainer.model_lvl0(x_proj, edge_block[:2].to(device), edge_attr_b, None, bs=bs)[:bs]
+        idx = trainer.node2comm_fixed[node_idx_b[:bs]].long()
+        sums.index_add_(0, idx, m1.fc_in(z0))
+        count.index_add_(0, idx, torch.ones_like(idx, dtype=torch.float))
+    return sums / count.clamp(min=1).unsqueeze(1), count
+
+
 @torch.no_grad()
 def encode_section(trainer, section_path: str, gene_graph=None):
     """Encode one section to its three hierarchical representations.
@@ -127,6 +172,15 @@ def encode_section(trainer, section_path: str, gene_graph=None):
     """
     trainer.data_path = section_path
     trainer.load_data()
+
+    # Inference mode: dropout off, sharp niche assignment.
+    for m in (trainer.model_lvl0, trainer.model_lvl1, trainer.pooler_lvl2,
+              trainer.model_lvl2, trainer.global_decoder):
+        m.eval()
+    if getattr(trainer, "grn_layer", None) is not None:
+        trainer.grn_layer.eval()
+
+    global_reps = section_community_reps(trainer, gene_graph)
 
     X = trainer.X
     n_cells = X.size(0)
@@ -174,11 +228,13 @@ def encode_section(trainer, section_path: str, gene_graph=None):
             and getattr(trainer, "grn_layer", None) is not None
         ):
             edge_index_grn = gene_graph["global"].edge_index.to(device)
-            gene_emb, attn = trainer.grn_layer(
+            refined, attn = trainer.grn_layer(
                 gene_emb=gene_emb,
                 edge_index_grn=edge_index_grn,
                 return_attention=True,
             )
+            if _pretrain.GRN_FEEDS_MAIN_PATH:  # else: attention only, encoder input unchanged
+                gene_emb = refined
             # The gene graph is global, so attention is identical across
             # batches; keep the first.
             if grn_attention is None:
@@ -190,26 +246,12 @@ def encode_section(trainer, section_path: str, gene_graph=None):
         z0_targets = z0_batch[:bs] if z0_batch.size(0) > bs else z0_batch
 
         node2comm_batch = trainer.node2comm_fixed[target_idx]
-        z1_batch = trainer.model_lvl1(
-            x_lower=z0_batch,
-            node2comm_batch=node2comm_batch,
-            super_sp_global=trainer.super_sp_fixed,
+        z1_batch, z2_batch, attn_probs, _ = hierarchy_forward(
+            trainer.model_lvl1, trainer.pooler_lvl2, trainer.model_lvl2,
+            z0_targets, node2comm_batch, trainer.super_sp_fixed,
+            global_reps=global_reps,
         )
-        z1_targets = z1_batch[:bs] if z1_batch.size(0) > bs else z1_batch
-
-        C_L1 = trainer.model_lvl1.prototypes
-        C_L2, S_matrix = trainer.pooler_lvl2(C_L1)
-
-        Dk_raw_L1 = trainer.super_sp_fixed[node2comm_batch.long(), :]
-        S_hard = torch.zeros_like(S_matrix)
-        S_hard.scatter_(1, S_matrix.argmax(dim=1, keepdim=True), 1.0)
-        Hk_L2_distances = torch.matmul(Dk_raw_L1.float(), S_hard.float())
-
-        z2_batch, attn_probs = trainer.model_lvl2(
-            x_lower=z1_batch,
-            c_l2_prototypes=C_L2,
-            hk_l2_distances=Hk_L2_distances,
-        )
+        z1_targets = z1_batch
 
         z0_full[target_idx] = z0_targets
         z1_full[target_idx] = z1_targets

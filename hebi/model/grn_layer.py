@@ -26,10 +26,12 @@ class GRNRefinementLayer(nn.Module):
 
         self.norm = nn.LayerNorm(dim_model)
         self.activation = nn.GELU()
+        self.logit_scale = nn.Parameter(torch.tensor(3.0))
 
     def forward(self, gene_emb, edge_index_grn, return_attention=False, return_per_head=False):
+        
         refined_emb, (edge_index_out, attn_weights) = self.gat(
-            x=gene_emb,
+            x=gene_emb* self.logit_scale.exp(),
             edge_index=edge_index_grn,
             return_attention_weights=True
         )

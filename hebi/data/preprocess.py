@@ -29,15 +29,22 @@ import torch
 
 from hebi.data.graph import build_spatial_graph
 from hebi.data.coarsening import create_metis_partition
+from hebi.data.graph_diagnostics import neighbour_diagnostics, suggest_k
 from hebi.data.vocabulary import harmonise_adata
 
 warnings.filterwarnings("ignore")
 
-# Defaults matching the Methods. k=5 is what the paper reports; some older
-# .pt files were built with k=30, so the value used is written into meta.
-DEFAULT_K = 5
+# k=30 is the default because it gave the best held-out ARI on every
+# section HEBI was developed on, across four platforms. It is not
+# universal: what matters is the physical reach of the neighbourhood, so
+# each section reports its reach in cell diameters and warns when the
+# chosen k falls outside the usual range. See hebi.data.graph_diagnostics.
+DEFAULT_K = 30
 DEFAULT_METIS_CLUSTERS = 1024
 DEFAULT_SEED = 42
+
+# Neighbourhood reach considered local, in cell diameters.
+TARGET_REACH = (2.0, 3.0)
 
 
 # ======================================================================
@@ -287,9 +294,55 @@ def find_spatial_key(adata) -> str:
 
 
 # ======================================================================
+# Neighbourhood reach
+# ======================================================================
+def check_neighbourhood_reach(coords, k, name="section", n_sample=20000):
+    """Report how far the chosen k reaches, and warn if it looks wrong.
+
+    k is a count, but what matters is the physical extent of the
+    neighbourhood it produces, and that depends on cell density. The same
+    k spans 2.0 cell diameters on one platform and 3.2 on another. Two to
+    three diameters covers a cell and its first two rings of contacts.
+
+    Returns the reach in cell diameters, which is stored in the .pt meta
+    so sections stay comparable across platforms and coordinate units.
+    """
+    rows, scale = neighbour_diagnostics(
+        coords, k_values=sorted({3, 5, 10, 15, 20, 30, 40, 50, 75, k}),
+        n_sample=n_sample,
+    )
+    reach = next(r["reach_in_cell_diameters"] for r in rows if r["k"] == k)
+    lo, hi = TARGET_REACH
+
+    print(f"  [{name}] k={k} spans {reach:.2f} cell diameters "
+          f"(median nearest-neighbour distance {scale['nn1_median']})")
+
+    if reach < 1.0:
+        suggestion = suggest_k(rows)
+        print(f"           WARNING: below one cell diameter — the "
+              f"neighbourhood barely reaches")
+        print(f"           adjacent cells, so spatial context is largely "
+              f"unused. Consider k="
+              f"{suggestion['k_min']}-{suggestion['k_max']}.")
+    elif reach < lo:
+        suggestion = suggest_k(rows)
+        print(f"           note: below the usual {lo}-{hi} diameter range. "
+              f"Consider k="
+              f"{suggestion['k_min']}-{suggestion['k_max']}.")
+    elif reach > 4.0:
+        suggestion = suggest_k(rows)
+        print(f"           note: {reach:.2f} diameters is broad — the "
+              f"neighbourhood may span distinct")
+        print(f"           tissue structures. Consider k="
+              f"{suggestion['k_min']}-{suggestion['k_max']}.")
+
+    return round(float(reach), 3)
+
+
+# ======================================================================
 # Core
 # ======================================================================
-def build_section_dict(adata, meta, k: int = DEFAULT_K,
+def build_section_dict(adata, meta, name: str = "section", k: int = DEFAULT_K,
                        n_metis: int = DEFAULT_METIS_CLUSTERS,
                        seed: int = DEFAULT_SEED,
                        label_mappings=None, label_cols=None):
@@ -303,6 +356,8 @@ def build_section_dict(adata, meta, k: int = DEFAULT_K,
     )
     coords = coords_full[:, :2] if coords_full.shape[1] > 2 else coords_full
 
+    reach = check_neighbourhood_reach(coords.numpy(), k, name=name)
+
     edge_index, _, _ = build_spatial_graph(coords.numpy(), k=k)
 
     n_clusters = n_metis if adata.n_obs >= n_metis else max(1, adata.n_obs // 10)
@@ -313,7 +368,8 @@ def build_section_dict(adata, meta, k: int = DEFAULT_K,
     # The graph parameters travel with the data: a .pt built with k=30
     # is not interchangeable with one built at k=5.
     meta = dict(meta)
-    meta.update({"k_neighbors": k, "n_metis_clusters": n_clusters, "seed": seed})
+    meta.update({"k_neighbors": k, "n_metis_clusters": n_clusters,
+                 "seed": seed, "reach_cell_diameters": reach})
 
     section = {
         "X": X.half(),
@@ -346,22 +402,40 @@ def preprocess_h5ad(h5ad_path, out_root, vocab_path, task="clustering",
                     k=DEFAULT_K, n_metis=DEFAULT_METIS_CLUSTERS,
                     seed=DEFAULT_SEED, normalise=False, target_sum=1e4,
                     min_counts=None, section_col=None, split_col=None,
-                    label_cols=None, use_counts_layer=False,
+                    label_cols=None, counts_layer=None,
                     species=None, overwrite=False):
     """Preprocess one .h5ad into one or more .pt sections."""
     h5ad_path = Path(h5ad_path)
     out_root = Path(out_root)
     stem = h5ad_path.stem
 
+    # Nothing below this point is cheap: reading the .h5ad, harmonising
+    # the vocabulary and measuring the graph all cost real time. When the
+    # output already exists and is not being overwritten, return its path
+    # without doing any of it, so re-running a notebook is instant.
+    if not overwrite and task == "clustering" and section_col is None:
+        existing = out_root / f"{stem}.pt"
+        if existing.exists():
+            print(f"\n{'=' * 60}\n{h5ad_path.name}: already processed, "
+                  f"reusing {existing.name}")
+            return [existing]
+
     print(f"\n{'=' * 60}\nLoading {h5ad_path.name}")
     adata = sc.read_h5ad(h5ad_path)
 
-    if use_counts_layer:
-        if "counts" not in adata.layers:
-            raise KeyError("--use_counts_layer given but adata.layers['counts'] "
-                           f"is absent. Layers: {list(adata.layers)}")
-        adata.X = adata.layers["counts"].copy()
-        print("  using adata.layers['counts'] as X")
+    if counts_layer:
+        if counts_layer not in adata.layers:
+            raise KeyError(
+                f"--counts_layer '{counts_layer}' is not in this file. "
+                f"Available layers: {list(adata.layers)}"
+            )
+        adata.X = adata.layers[counts_layer].copy()
+        print(f"  using adata.layers['{counts_layer}'] as X")
+    elif adata.layers:
+        # Worth saying: a raw-count layer alongside a processed X is the
+        # usual export shape, and silently using the wrong one is easy.
+        print(f"  note: this file has layers {list(adata.layers)}. X is used "
+              f"as-is; pass --counts_layer to take one of them instead.")
 
     meta = parse_metadata(h5ad_path)
     print(f"  metadata: {meta}")
@@ -422,7 +496,7 @@ def preprocess_h5ad(h5ad_path, out_root, vocab_path, task="clustering",
             return
         out_file.parent.mkdir(parents=True, exist_ok=True)
         section = build_section_dict(
-            sub, meta, k=k, n_metis=n_metis, seed=seed,
+            sub, meta, name=out_file.stem, k=k, n_metis=n_metis, seed=seed,
             label_mappings=mappings, label_cols=label_cols,
         )
         torch.save(section, out_file)
@@ -483,15 +557,19 @@ def build_parser():
     p.add_argument("--target_sum", type=float, default=1e4,
                    help="Library-size target for normalize_total. Only used "
                         "when the input still needs normalising.")
-    p.add_argument("--use_counts_layer", action="store_true",
-                   help="Take X from adata.layers['counts'] before anything else.")
+    p.add_argument("--counts_layer", type=str, default=None,
+                   help="Name of the layer holding raw counts, used as X "
+                        "before anything else. Commonly 'counts' or 'raw'. "
+                        "The available layers are printed if the name is wrong.")
     p.add_argument("--min_counts", type=int, default=None,
                    help="Drop cells below this total count. Off by default; "
                         "whatever you choose is baked into the .pt.")
 
     p.add_argument("--k", type=int, default=DEFAULT_K,
-                   help=f"Spatial kNN degree (default {DEFAULT_K}, as in the "
-                        f"Methods). Recorded in the .pt meta.")
+                   help=f"Spatial kNN degree (default {DEFAULT_K}). Each "
+                        f"section reports the physical reach this gives and "
+                        f"suggests a range if it looks wrong. Recorded in "
+                        f"the .pt meta.")
     p.add_argument("--n_metis", type=int, default=DEFAULT_METIS_CLUSTERS)
     p.add_argument("--seed", type=int, default=DEFAULT_SEED)
 
@@ -534,7 +612,7 @@ def main(argv=None):
                 target_sum=args.target_sum,
                 min_counts=args.min_counts, section_col=args.section_col,
                 split_col=args.split_col, label_cols=args.label_cols,
-                use_counts_layer=args.use_counts_layer,
+                counts_layer=args.counts_layer,
                 species=args.species, overwrite=args.overwrite,
             )
         except Exception as exc:

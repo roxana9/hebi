@@ -13,6 +13,7 @@ import torch
 
 from hebi.training.pretrain import Train
 from hebi.model.grn_layer import GRNRefinementLayer
+from hebi.model.hebi import init_slope_theta
 
 EMBED_DIM = 128
 
@@ -28,16 +29,15 @@ def continual_adapt(
     gene_graph=None,
     gene_graph_list=None,
     init: str = "pretrained",
+    verbose: int = 0,
 ):
     """Adapt a checkpoint to the sections in data_dir.
 
     init:
         "pretrained"  load foundation weights, then re-initialise the
-                      niche-level modules (pooler and Level-2 transformer),
-                      re-initialise the niche prototypes orthogonally, and
-                      re-derive each cell's community assignment from the
-                      similarity between its projected embedding and the
-                      Level-1 prototypes.
+                      niche-level modules (pooler and Level-2 transformer,
+                      including its distance slope) and the niche prototypes
+                      (orthogonally).
         "random"      all weights start from scratch (from-scratch baseline
                       sharing the architecture but not the pretrained
                       knowledge).
@@ -46,7 +46,9 @@ def continual_adapt(
     device = torch.device(device)
 
     ckpt = torch.load(checkpoint_path, map_location="cpu")
-    n_proto_l1 = ckpt["model_lvl1"]["prototypes"].shape[0]
+    # Level 1 has no prototype bank (keys are the communities of each
+    # section); the count is kept only for the Train constructor.
+    n_proto_l1 = 1024
     try:
         n_proto_l2 = ckpt["pooler_lvl2"]["l2_prototypes"].shape[0]
     except (KeyError, IndexError):
@@ -68,6 +70,7 @@ def continual_adapt(
         early_stopping_patience=num_epochs + 1,  # disable early stopping
         checkpoint_path=checkpoint_path,
         device=device,
+        verbose=verbose,
     )
 
     trainer.discover_data_files()
@@ -133,19 +136,21 @@ def continual_adapt(
         trainer.optimizer.add_param_group(
             {
                 "params": [p for p in grn_params if p.requires_grad],
-                "lr": lr,
+                "lr": 1e-3,
                 "weight_decay": 0.0,
             }
         )
-        print(f"GRN parameter group lr={lr:.2e}")
+        print(f"GRN parameter group lr={lr}")
 
-    print(f"\nContinual adaptation over sections in: {data_dir}")
+    print(f"\nContinual adaptation: {num_epochs} epochs over "
+          f"{len(trainer.data_files)} sections")
     trainer.best_loss = float("inf")
     trainer.epochs_no_improve = 0
     last_loss = None
 
     for epoch in range(1, num_epochs + 1):
-        print(f"\nContinual epoch {epoch}/{num_epochs}")
+        if verbose:
+            print(f"\nContinual epoch {epoch}/{num_epochs}")
         last_loss = trainer.train_epoch(epoch)
 
     final_loss = last_loss if last_loss is not None else 0.0
@@ -179,9 +184,10 @@ def _reinit_niche_level(trainer):
 
     with torch.no_grad():
         trainer.model_lvl2.temperature.fill_(1.0)
-        torch.nn.init.normal_(
-            trainer.model_lvl2.spatial_bias_encoder.weight, mean=0.0, std=0.01
-        )
+        # distance slope back to its initial value (w2 = -0.1)
+        fresh = init_slope_theta(trainer.model_lvl2.heads, -0.1,
+                                 trainer.model_lvl2.slope_rate)
+        trainer.model_lvl2.dist_theta.copy_(fresh.to(trainer.device))
 
     print("Orthogonal init for niche prototypes")
     with torch.no_grad():
@@ -189,26 +195,9 @@ def _reinit_niche_level(trainer):
         rand_matrix = torch.randn(EMBED_DIM, K, device=trainer.device)
         Q, _ = torch.linalg.qr(rand_matrix)
         trainer.pooler_lvl2.l2_prototypes.data.copy_(Q.T)
-
-    print("Re-deriving community assignments")
-    with torch.no_grad():
-        gene_emb = trainer.gene_embedder(trainer.gene_ids)
-        gene_emb = trainer.gene_linear(gene_emb)
-        gene_emb = torch.nn.functional.normalize(gene_emb, dim=1, p=2)
-
-        X_proj = torch.nn.functional.normalize(trainer.X @ gene_emb, dim=1)
-        protos = torch.nn.functional.normalize(trainer.model_lvl1.prototypes, dim=1)
-
-        trainer.node2comm_fixed = (X_proj @ protos.T).argmax(dim=1)
-
-        N = trainer.node2comm_fixed.shape[0]
-        K = trainer.num_prototypes_lvl1
-        super_sp = torch.zeros(N, K, device=trainer.device)
-        super_sp.scatter_(1, trainer.node2comm_fixed.unsqueeze(1), 1.0)
-        trainer.super_sp_fixed = super_sp
-
-    used = trainer.node2comm_fixed.unique().shape[0]
-    print(f"Communities re-aligned: {used}/{K} prototypes used")
+    # (The former "re-derive community assignments" step is removed: it relied
+    # on the Level-1 prototype bank, and train_epoch reloads each section's
+    # METIS partition anyway, so it never affected training.)
 
 
 def create_random_checkpoint(

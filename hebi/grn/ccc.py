@@ -69,12 +69,20 @@ def _get_ligrec_edges(gene_graphs, gene_names, grn_attn_weights,
     g          = gene_graphs["global"]
     edge_index = g.edge_index.cpu().numpy()
     edge_attr  = g.edge_attr.cpu().numpy()
+    forward = getattr(g, "ligrec_forward", None)
+    if forward is not None:
+        forward = forward.cpu().numpy()
+    else:
+        print("  [warn] graph has no ligrec_forward mask; both directions of "
+              "each ligand-receptor pair will be scored. Rebuild the GRN.")
     attn = (grn_attn_weights.detach().cpu().numpy()
             if torch.is_tensor(grn_attn_weights)
             else np.asarray(grn_attn_weights).ravel())
     rows = []
     for e in range(edge_index.shape[1]):
         if edge_attr[e, ligrec_idx] > 0:
+            if forward is not None and not forward[e]:
+                continue
             rows.append({
                 "ligand":   gene_names[int(edge_index[0, e])],
                 "receptor": gene_names[int(edge_index[1, e])],
@@ -115,6 +123,115 @@ def build_ccc_tensor(adata, gene_graphs, gene_names, grn_attn_weights,
     df = pd.DataFrame(rows)
     print(f"  ✅ CCC tensor: {len(df)} sender→receiver interactions")
     return df
+
+def _bh_fdr(p):
+    """Benjamini-Hochberg adjusted p-values."""
+    p = np.asarray(p, dtype=float)
+    n = len(p)
+    if n == 0:
+        return p
+    order = np.argsort(p)
+    ranked = p[order] * n / np.arange(1, n + 1)
+    ranked = np.minimum.accumulate(ranked[::-1])[::-1]
+    out = np.empty(n)
+    out[order] = np.clip(ranked, 0, 1)
+    return out
+
+
+def build_spatial_ccc_tensor(adata, gene_graphs, gene_names, grn_attn_weights,
+                             edge_index, cluster_key="annotation",
+                             edge_attr_names=None, min_edges=100,
+                             drop_saturated=True):
+    """Spatially resolved inter-niche communication.
+
+    Only pairs of cells that are neighbours in the section's spatial graph
+    (the graph the model was trained on, edge_index from the .pt) contribute.
+    For a ligand-receptor pair with GRN attention a, sender niche s and
+    receiver niche r:
+
+        score(s, r)      = a * sum_{(i,j) in E, i in s, j in r} lig(i) * rec(j) / |s|
+        enrichment(s, r) = mean of lig(i)*rec(j) over the s->r boundary edges
+                           / mean over all edges of the section
+        p                one-sided test of the boundary mean against the mean
+                           of the same number of random edges (normal
+                           approximation, valid for >= min_edges edges)
+        fdr              Benjamini-Hochberg over all tested links of the section
+
+    Niche size and boundary length cancel in the enrichment, and a ligand
+    expressed everywhere scores ~1 wherever it is not specific. Links with
+    fewer than min_edges boundary edges are not tested. Self links (s == r)
+    are omitted.
+    """
+    if edge_attr_names is None:
+        edge_attr_names = ["pathway", "spearman", "ligrec", "tf_target"]
+    lr_df = _get_ligrec_edges(gene_graphs, gene_names, grn_attn_weights, edge_attr_names)
+    if lr_df.empty:
+        print("  ⚠️  No LigRec edges found.")
+        return pd.DataFrame()
+    if drop_saturated:
+        # attention == 1: receptor with a single regulator, no learned signal
+        lr_df = lr_df[lr_df["attention"] < 1.0 - 1e-6]
+    lr_df = lr_df.drop_duplicates("pair")
+
+    n = adata.n_obs
+    ei = edge_index.cpu().numpy() if torch.is_tensor(edge_index) else np.asarray(edge_index)
+    A = sp.csr_matrix((np.ones(ei.shape[1]), (ei[0], ei[1])), shape=(n, n))
+    A = ((A + A.T) > 0).astype(float).tocsr()          # symmetric neighbour graph
+    Ac = A.tocoo()
+    n_edges_total = A.nnz
+
+    labels = adata.obs[cluster_key].astype(str).values
+    niches, code = np.unique(labels, return_inverse=True)
+    M = sp.csr_matrix((np.ones(n), (np.arange(n), code)), shape=(n, len(niches)))
+    size = np.asarray(M.sum(axis=0)).ravel()
+    E = np.asarray((M.T @ A @ M).todense())             # boundary edges between niches
+
+    X = adata.X.tocsc() if sp.issparse(adata.X) else np.asarray(adata.X)
+    var_to_col = {g: i for i, g in enumerate(adata.var_names)}
+
+    def column(g):
+        c = X[:, var_to_col[g]]
+        return np.asarray(c.todense()).ravel() if sp.issparse(c) else np.asarray(c).ravel()
+
+    rows = []
+    for _, lr in lr_df.iterrows():
+        lig, rec, att = lr["ligand"], lr["receptor"], lr["attention"]
+        if lig not in var_to_col or rec not in var_to_col:
+            continue
+        L, R = column(lig), column(rec)
+        v = L[Ac.row] * R[Ac.col]
+        mu, sd = v.mean(), v.std()
+        if mu == 0 or sd == 0:
+            continue
+        raw = np.asarray((M.T @ (sp.diags(L) @ A @ sp.diags(R)) @ M).todense())
+        for i, s in enumerate(niches):
+            for j, t in enumerate(niches):
+                n_e = E[i, j]
+                if i == j or n_e < min_edges or raw[i, j] == 0:
+                    continue
+                m_obs = raw[i, j] / n_e
+                z = (m_obs - mu) / (sd / np.sqrt(n_e))
+                rows.append({
+                    "pair": lr["pair"], "ligand": lig, "receptor": rec,
+                    "attention": att, "sender": s, "receiver": t,
+                    "n_edges": int(n_e),
+                    "score": att * raw[i, j] / size[i],
+                    "enrichment": m_obs / mu,
+                    "p": float(norm_sf(z)),
+                })
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df["fdr"] = _bh_fdr(df["p"].values)
+    print(f"  ✅ Spatial CCC: {len(df)} links tested "
+          f"({n_edges_total:,} neighbour edges, min {min_edges} per boundary)")
+    return df
+
+
+def norm_sf(z):
+    """Upper tail of the standard normal."""
+    from scipy.stats import norm
+    return norm.sf(z)
+
 
 def find_top_sender_niches(comm_df, top_k=3):
     if comm_df.empty: return []

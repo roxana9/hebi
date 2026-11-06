@@ -244,31 +244,39 @@ def build_hetero_grn(
     df_doro = fetch_dorothea_high_conf(species_tax)
 
     def get_directed_edges(df, tf=False, conf_col=None):
+        """Return (all_edges, forward_edges).
+
+        forward_edges holds each interaction in the direction recorded by the
+        curated source. all_edges additionally holds the reverse copies added
+        for message passing when add_reverse_for_curated is set.
+        """
         if df is None or len(df) == 0:
-            return set()
+            return set(), set()
         try:
             src_list = pick_symbols(df, "source").str.upper()
             dst_list = pick_symbols(df, "target").str.upper()
         except KeyError:
-            return set()
+            return set(), set()
         if conf_col is not None and conf_col in df.columns:
             conf_list = pd.to_numeric(df[conf_col], errors="coerce").fillna(0.0).astype(float)
         else:
             conf_list = pd.Series(np.ones(len(df), dtype=float))
         edges = set()
+        forward = set()
         for s, d, c in zip(src_list, dst_list, conf_list):
             if s in gene2idx and d in gene2idx and s != d:
                 if float(c) >= float(conf_min):
                     edges.add((gene2idx[s], gene2idx[d]))
+                    forward.add((gene2idx[s], gene2idx[d]))
                     if tf:
                         continue
                     if add_reverse_for_curated:
                         edges.add((gene2idx[d], gene2idx[s]))
-        return edges
+        return edges, forward
 
-    pathway_edges = get_directed_edges(df_pathway, conf_col="confidence")
-    ligrec_edges = get_directed_edges(df_ligrec, conf_col=None)
-    tf_edges = get_directed_edges(df_doro, tf=True, conf_col=None)
+    pathway_edges, pathway_forward = get_directed_edges(df_pathway, conf_col="confidence")
+    ligrec_edges, ligrec_forward = get_directed_edges(df_ligrec, conf_col=None)
+    tf_edges, _ = get_directed_edges(df_doro, tf=True, conf_col=None)
 
     print("   Computing data-driven Spearman edges...")
     np.random.seed(seed)
@@ -344,6 +352,24 @@ def build_hetero_grn(
         data.edge_attr = torch.empty((0, 4), dtype=torch.float)
 
     data.num_nodes = len(gene_names)
+
+    # Direction masks, aligned with edge_index.
+    #   ligrec_forward  ligand -> receptor as recorded in OmniPath (used by CCC)
+    #   reverse_only    edge exists only as a reverse copy added for message
+    #                   passing: not a forward curated edge, not a TF edge and
+    #                   not a co-expression edge. These carry attention (they
+    #                   take part in the softmax) but are not interactions and
+    #                   must be excluded from any reported ranking.
+    forward_curated = pathway_forward | ligrec_forward | tf_edges
+    data.ligrec_forward = torch.tensor(
+        [(u, v) in ligrec_forward for (u, v) in edge_index_list],
+        dtype=torch.bool,
+    )
+    data.reverse_only = torch.tensor(
+        [((u, v) not in forward_curated) and ((u, v) not in spearman_edges)
+         for (u, v) in edge_index_list],
+        dtype=torch.bool,
+    )
     gene_graphs = {"global": data}
     edge_attr_names = ["pathway", "spearman", "ligrec", "tf_target"]
 
@@ -352,5 +378,7 @@ def build_hetero_grn(
     print(f"   Spearman edges: {len(spearman_edges)}")
     print(f"   LigRec edges:   {len(ligrec_edges)}")
     print(f"   TF edges:       {len(tf_edges)}")
+    print(f"   Reverse-only copies (excluded from reports): "
+          f"{int(data.reverse_only.sum())}")
 
     return gene_graphs, gene_names, edge_attr_names

@@ -1,5 +1,3 @@
-
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -79,6 +77,26 @@ def _resolve_edge_types(edge_attr_row, edge_attr_names):
     return "|".join([edge_attr_names[i] for i in idx])
 
 
+def _reverse_only_mask(gene_graphs, n_edges):
+    """Boolean mask of edges that exist only as reverse copies of curated
+    interactions (added for message passing). Built by build_fixed.py.
+
+    Returns an all-False mask, with a warning, for graphs built without it.
+    """
+    g = gene_graphs["global"]
+    mask = getattr(g, "reverse_only", None)
+    if mask is None:
+        print("  [warn] graph has no reverse_only mask; reverse copies of "
+              "curated edges will be reported. Rebuild the GRN with "
+              "build_fixed.py.")
+        return np.zeros(n_edges, dtype=bool)
+    mask = _to_numpy(mask).astype(bool).reshape(-1)
+    if len(mask) != n_edges:
+        raise ValueError(f"reverse_only has {len(mask)} entries, graph has "
+                         f"{n_edges} edges")
+    return mask
+
+
 # =========================================================
 # 1) Edge-level report
 # =========================================================
@@ -140,8 +158,11 @@ def build_global_edge_report(
         rows.append(row)
 
     df = pd.DataFrame(rows)
+    df["reverse_only"] = _reverse_only_mask(gene_graphs, E)[df["edge_id"].values]
     df = df.sort_values("attention", ascending=not sort_desc).reset_index(drop=True)
     df["evidence_tier"] = df.apply(classify_evidence_tier, axis=1)
+    # In-degree is taken over ALL incoming edges, reverse copies included,
+    # because they all took part in the attention softmax for that target.
     df = add_edge_competition_metrics(df)
     return df
 
@@ -192,7 +213,11 @@ def build_global_node_report(
     # attention mass by edge type per node
     type_mass = np.zeros((num_nodes, len(edge_attr_names)), dtype=np.float64)
 
+    rev = _reverse_only_mask(gene_graphs, edge_index.shape[1])
+
     for e in range(edge_index.shape[1]):
+        if rev[e]:
+            continue
         u = int(src[e])
         v = int(dst[e])
         a = float(attn[e])
@@ -285,7 +310,11 @@ def summarize_edge_type_attention(
     mass = np.zeros(len(edge_attr_names), dtype=np.float64)
     counts = np.zeros(len(edge_attr_names), dtype=np.int64)
 
+    rev = _reverse_only_mask(gene_graphs, E)
+
     for e in range(E):
+        if rev[e]:
+            continue
         active_types = np.where(edge_attr[e] > 0)[0]
         if len(active_types) == 0:
             continue
@@ -658,14 +687,16 @@ def save_niche_grn_matrix(
         mean_expr[c] = (np.asarray(sub.mean(0)).ravel()
                         if sp.issparse(sub) else np.asarray(sub).mean(0).ravel())
 
-    pairs = [f"{gene_names[ei[0, e]]}→{gene_names[ei[1, e]]}"
-             for e in range(ei.shape[1])]
+    rev = _reverse_only_mask(gene_graphs, ei.shape[1])
+    keep = np.where(~rev)[0]
+
+    pairs = [f"{gene_names[ei[0, e]]}→{gene_names[ei[1, e]]}" for e in keep]
     mat = pd.DataFrame(index=pairs, columns=niches, dtype=float)
 
     for c in niches:
         expr = mean_expr[c]
         col = []
-        for e in range(ei.shape[1]):
+        for e in keep:
             sc = var_to_col.get(gene_names[ei[0, e]])
             dc = var_to_col.get(gene_names[ei[1, e]])
             if sc is None or dc is None:
@@ -800,6 +831,11 @@ def run_global_grn_report(
     )
 
     edge_df_full = edge_df.copy()
+
+    n_rev = int(edge_df["reverse_only"].sum())
+    if n_rev:
+        print(f"  Excluding {n_rev} reverse-only copies from the report")
+    edge_df = edge_df[~edge_df["reverse_only"]].reset_index(drop=True)
 
     edge_df_nontrivial = edge_df[edge_df["is_competitive"]].copy()
     if len(edge_df_nontrivial) == 0:

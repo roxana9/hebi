@@ -34,9 +34,9 @@ mpl.rcParams["svg.fonttype"] = "none"
 
 SATURATION_TOL = 1e-6
 
-CHORD_COLORS = [
-    "#8E44AD", "#2E66B3", "#C25283", "#4A2E80", "#27AE60",
-    "#D35400", "#5B32A6", "#16A085", "#34495E",
+CHORD_COLORS = [   # distinct hues, one per ligand-receptor pair
+    "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
+    "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f",
 ]
 
 NICHE_COLORS = [
@@ -242,23 +242,51 @@ def _draw_chord_panel(ax, sr_agg, pair_colors, niche_colors, title):
                 color="#1A1521")
 
 
+def select_significant(comm_dfs, fdr_max=0.05, min_enrichment=2.0, shared_pairs=8):
+    """Spatial tables only: keep links with fdr < fdr_max and enrichment >=
+    min_enrichment, then restrict every section to the same shared_pairs
+    ligand-receptor pairs (largest total kept score over all sections), so
+    the panels show one common set of pairs."""
+    kept = []
+    for df in comm_dfs:
+        if df is None or df.empty or "fdr" not in df.columns:
+            kept.append(df)
+            continue
+        kept.append(df[(df["fdr"] < fdr_max) & (df["enrichment"] >= min_enrichment)])
+    pooled = pd.concat([k for k in kept if k is not None and not k.empty])
+    if shared_pairs and not pooled.empty:
+        top = (pooled.groupby("pair")["score"].sum()
+               .sort_values(ascending=False).head(shared_pairs).index)
+        kept = [k[k["pair"].isin(top)] if k is not None else None for k in kept]
+    return kept
+
+
 def plot_ccc_chord(
     comm_dfs,
     section_labels,
     out_path: str,
-    top_k_pairs: int = 5,
-    min_score_pct: float = 0.15,
-    top_n_edges: int = 18,
+    top_k_pairs: int = 8,
+    min_score_pct: float = 0.0,
+    top_n_edges: int = 20,
     drop_saturated: bool = True,
     panel_size=(6.0, 6.5),
     formats=("png", "svg"),
     dpi: int = 300,
+    fdr_max: float = 0.05,
+    min_enrichment: float = 2.0,
 ):
     """One figure with a chord panel per section and a shared legend.
 
     Ligand-receptor pairs and niches keep the same colour across panels,
-    so panels can be compared directly.
+    so panels can be compared directly. For spatial tables (with 'fdr' and
+    'enrichment' columns) only significant, enriched links are drawn, and
+    all sections share the same top_k_pairs pairs; the statistical filter
+    replaces the display threshold, so min_score_pct defaults to 0.
     """
+    if any(df is not None and not df.empty and "fdr" in df.columns for df in comm_dfs):
+        comm_dfs = select_significant(comm_dfs, fdr_max=fdr_max,
+                                      min_enrichment=min_enrichment,
+                                      shared_pairs=top_k_pairs)
     filtered, kept_pairs, all_niches = [], set(), set()
 
     for df in comm_dfs:

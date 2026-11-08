@@ -25,8 +25,9 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 
-# PyTorch itself is deliberately absent: the right build depends on the
-# CUDA version, so it is installed first from pytorch.org (see README).
+# PyTorch and torch_sparse are deliberately absent: the right build of each
+# depends on the CUDA version, so they are installed first (see README).
+# torch_sparse from PyPI is source-only and needs a compiler.
 dependencies = [
     "torch-geometric>=2.6",
     "scanpy>=1.10",

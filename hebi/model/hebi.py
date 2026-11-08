@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.nn.dense.linear import Linear
 from torch_geometric.nn import GAT,TransformerConv
-from torch_scatter import scatter_mean 
+
 
 # --- 1. Level 0 GAT Encoder (No Changes) ---
 class GATEncoder(nn.Module):

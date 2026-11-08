@@ -21,10 +21,19 @@ correction step.
 
 ## Installation
 
-HEBI needs Python 3.11+ and PyTorch. Install PyTorch first, matching your
-CUDA version, then the package.
+HEBI needs Python 3.11+, PyTorch and `torch_sparse`. Both are built per
+CUDA version, so they are installed first, then the package.
+
+The commands below use PyTorch 2.6.0 with CUDA 12.4, the versions HEBI was
+developed with. For another CUDA version, or CPU only, change `cu124` in
+both URLs (e.g. `cu118`, `cu126`, `cpu`); see
+[pytorch.org](https://pytorch.org/get-started/locally/) and the
+[PyG install guide](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html).
 
 ### conda / mamba
+
+`environment.yml` installs PyTorch and `torch_sparse` through pip, since
+PyTorch is no longer published on its conda channel after 2.5.
 
 ```bash
 git clone https://github.com/roxana9/hebi.git
@@ -37,14 +46,21 @@ pip install -e .
 ### pip
 
 ```bash
-# PyTorch first — pick the build matching your CUDA version
-# see https://pytorch.org/get-started/locally/
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+# 1. PyTorch, matching your CUDA version
+pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 
+# 2. torch_sparse, a prebuilt wheel matching that PyTorch + CUDA build
+pip install torch_sparse -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
+
+# 3. HEBI
 git clone https://github.com/roxana9/hebi.git
 cd hebi
 pip install -e .
 ```
+
+If `torch_sparse` starts compiling from source, the `torch-X+cuY` part of
+the `-f` URL does not match the installed PyTorch. Check it with
+`python -c "import torch; print(torch.__version__)"`.
 
 Optional clustering backends:
 

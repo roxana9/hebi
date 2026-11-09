@@ -79,19 +79,39 @@ hebi-run --help
 
 ## Pretrained weights
 
-<!-- TODO: upload checkpoints and fill in the download instructions.
+The pretrained checkpoint and the gene vocabulary are on Hugging Face:
+[huggingface.co/Roxana9/hebi](https://huggingface.co/Roxana9/hebi)
 
-Two checkpoints will be released:
-  - trained on raw counts
-  - trained on library-normalised, log1p data
+| file | content |
+| --- | --- |
+| `hebi_hybrid_oldL0.pt` | pretrained HEBI weights |
+| `default_gene_vocab.json` | gene vocabulary used for pretraining |
 
-Use the one matching how your sections were preprocessed: a section
-encoded in a different space from the one the model was pretrained on
-will give degraded results without any error.
--->
+Download with the Hugging Face CLI:
 
-Pretrained weights are not yet released. Until then, `--init random`
-trains from scratch on your own sections.
+```bash
+pip install -U huggingface_hub
+hf download Roxana9/hebi --local-dir weights/
+```
+
+or from Python:
+
+```python
+from huggingface_hub import hf_hub_download
+
+ckpt = hf_hub_download("Roxana9/hebi", "hebi_hybrid_oldL0.pt")
+vocab = hf_hub_download("Roxana9/hebi", "default_gene_vocab.json")
+```
+
+Then pass them to `hebi-run`:
+
+```bash
+hebi-run --checkpoint_path weights/hebi_hybrid_oldL0.pt \
+         --vocab_path weights/default_gene_vocab.json ...
+```
+
+Without a checkpoint, `--init random` trains from scratch on your own sections.
+
 
 ---
 
@@ -129,8 +149,12 @@ hebi-run \
   --section_files section_1.pt section_2.pt \
   --h5ad_files data/my_sections/section_1.h5ad data/my_sections/section_2.h5ad \
   --vocab_path default_gene_vocab.json \
-  --n_cell_clusters 16 \
-  --n_composition_niches 12 \
+  --mode zero_shot \
+  --init pretrained \
+  --n_cell_clusters 18 \
+  --cluster_method kmeans \
+  --seed 2025 \
+  --point_size 2 \
   --output_dir results/
 ```
 
@@ -142,49 +166,149 @@ hebi-run --config configs/starmap.yaml
 
 ### 3. Outputs
 
-Written to `--output_dir`:
+HEBI produces cell-level embeddings and niche assignments directly from its hierarchical encoder. Cell clusters are obtained by clustering the Level-0 embeddings, whereas niche assignments are derived directly from Level-2 attention without post-hoc clustering.
 
+**Generated figures**
+
+When plotting is enabled, `--output_dir` contains:
+
+```text
+results/
+└── z0_kmeans_18.*    # Joint cell-level clustering across sections
 ```
-joint_cell_clusters_z0.png / .svg     all sections side by side
-joint_composition_niches.png / .svg
-<section>_plot/                       per-section figures
-```
 
-And in each section's `.h5ad` object:
+The number in the filename corresponds to `--n_cell_clusters`. Prototype assignments are available directly from the model but are not yet plotted automatically by the CLI.
 
-| `adata.obs` | meaning |
-| --- | --- |
-| `prototypes` | Level-2 attention argmax, straight from the forward pass |
-| `cell_clusters` | clustering of the cell-level `z0` |
-| `composition_niches` | k-means on local prototype composition |
+**AnnData representations**
 
----
+For each section, the following results are available in memory:
+
+| Location | Key | Description |
+| --- | --- | --- |
+| `adata.obs` | `prototypes` | Learned Level-2 niche assignments, obtained directly from the attention argmax |
+| `adata.obs` | `z0_kmeans_18` | Cell clusters obtained by jointly clustering Level-0 embeddings across sections |
+| `adata.obsm` | `z0` | Cell-level representations |
+| `adata.obsm` | `z1` | Community-contextualised cell representations |
+| `adata.obsm` | `z2` | Niche-level cell representations |
+
+The number of cell clusters is configurable through `--n_cell_clusters`. The number of learned niche prototypes is defined by the model architecture and checkpoint, not by the clustering parameters.
+
+**Note:** The current CLI does not automatically export the resulting AnnData objects as `.h5ad` files.
 
 ## Python API
+
+HEBI can be run through a single function or as separate stages, allowing users to explore different cell-clustering and niche-assignment settings without repeating model inference.
+
+### Option 1: Complete pipeline
 
 ```python
 from hebi.inference.pipeline import run_hebi
 
-sections, trainer, grn_attention = run_hebi(
+sections, ctx = run_hebi(
     checkpoint_path="hebi_foundation.pt",
     data_dir="processed/",
     section_files=["section_1.pt", "section_2.pt"],
     h5ad_files=["section_1.h5ad", "section_2.h5ad"],
     vocab_path="default_gene_vocab.json",
+    mode="zero_shot",
+    init="pretrained",
     n_cell_clusters=16,
-    n_composition_niches=12,
+    seed=2025,
+    output_dir="results/",
 )
 ```
 
-Or use the pieces directly:
+### Option 2: Run each stage separately
+
+**Step 1. Encode sections**
 
 ```python
-from hebi.inference.encode import load_hebi, encode_section
+from pathlib import Path
+from hebi.inference.pipeline import encode_sections
 
-model = load_hebi("hebi_foundation.pt", "processed/", "default_gene_vocab.json")
-out = encode_section(model, "processed/section_1.pt")
-# out["z0"], out["z1"], out["z2"], out["prototypes"], out["niche_attention"]
+PROCESSED_DIR = Path("processed/")
+RESULTS_DIR = Path("results/")
+
+SECTION_FILES = ["section_1.pt", "section_2.pt"]
+SECTION_NAMES = ["Xenium", "MERSCOPE"]
+
+sections, ctx = encode_sections(
+    checkpoint_path="hebi_foundation.pt",
+    data_dir=str(PROCESSED_DIR),
+    section_files=SECTION_FILES,
+    h5ad_files=["section_1.h5ad", "section_2.h5ad"],
+    vocab_path="default_gene_vocab.json",
+    section_labels=SECTION_NAMES,
+    mode="zero_shot",
+    init="pretrained",
+    grn=False,
+    seed=2025,
+    output_dir=str(RESULTS_DIR),
+)
 ```
+
+This stage generates three representations (`z0`, `z1` and `z2`) and the learned Level-2 prototype assignments.
+
+**Step 2. Cluster cell-level representations**
+
+```python
+from hebi.inference.pipeline import cluster_sections
+
+written = cluster_sections(
+    sections,
+    ctx,
+    n_cell_clusters=16,
+    cluster_method="kmeans",
+)
+```
+
+Cell clusters are obtained by jointly clustering Level-0 embeddings across sections.
+
+**Step 3. Assign and visualise niches**
+
+To obtain a user-specified number of spatial niches from the learned prototypes:
+
+```python
+from hebi.inference.niches import assign_niches, plot_niches
+
+n_niches = 7
+
+assign_niches(
+    sections,
+    ctx,
+    PROCESSED_DIR,
+    SECTION_FILES,
+    n_niches=n_niches,
+    section_names=SECTION_NAMES,
+    cache_dir=RESULTS_DIR,
+)
+
+plot_niches(
+    sections,
+    n_niches,
+    SECTION_NAMES,
+    out=RESULTS_DIR / "niches",
+)
+```
+
+The model's Level-2 prototype assignments are obtained directly during the forward pass. The optional `assign_niches` step produces a user-defined number of niches without requiring the encoding stage to be repeated.
+
+**Accessing the learned representations**
+
+```python
+from hebi.inference.cluster import KEY_PROTOTYPES
+
+adata = sections[0]
+
+cell_embeddings = adata.obsm["z0"]
+community_embeddings = adata.obsm["z1"]
+niche_embeddings = adata.obsm["z2"]
+
+# Direct Level-2 prototype assignments
+prototypes = adata.obs[KEY_PROTOTYPES]
+```
+
+The number of learned Level-2 prototypes is defined by the model architecture and checkpoint. The `n_niches` argument controls the requested number of niches in the subsequent assignment step.
 
 ---
 
@@ -225,11 +349,7 @@ weights of the seven self-supervised loss terms.
 
 ## Documentation
 
-<!-- TODO: point at the docs site once it is published.
-     Tutorials to add: preprocessing, STARmap walkthrough,
-     niche prediction, GRN and cell-cell communication. -->
-
-Tutorials are in preparation.
+The Jupyter notebooks used to reproduce each analysis presented in the manuscript are available in the [`notebooks/`](notebooks/) directory.
 
 ---
 

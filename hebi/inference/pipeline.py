@@ -53,6 +53,11 @@ from hebi.inference.encode import encode_section, load_hebi
 
 MODES = ("zero_shot", "continual")
 INIT_MODES = ("pretrained", "random", "hybrid")
+# "original": the pretraining objective. "spatial": adds the spatial niche
+# terms of hebi.training.pretrain during continual adaptation (SPATIAL_PRESET
+# unless spatial_weight / sharp_weight are given). Best with ~4096 METIS
+# communities per section.
+NICHE_OBJECTIVES = ("original", "spatial")
 from hebi.plotting.spatial import (
     get_palette,
     plot_spatial_labels,
@@ -231,6 +236,9 @@ def encode_sections(
     preprocess: bool = True,
     filter_min_counts: int = None,
     drop_unlabelled: bool = False,
+    niche_objective: str = "original",
+    spatial_weight: float = None,
+    sharp_weight: float = None,
 ):
     """Stage 1: adapt if asked, then encode every section.
 
@@ -250,6 +258,8 @@ def encode_sections(
         raise ValueError(f"mode must be one of {MODES}, got '{mode}'")
     if init not in INIT_MODES:
         raise ValueError(f"init must be one of {INIT_MODES}, got '{init}'")
+    spatial_weight, sharp_weight = resolve_niche_objective(
+        niche_objective, mode, spatial_weight, sharp_weight)
     if grn and mode != "continual":
         raise SystemExit(
             f"grn requires mode='continual' (got '{mode}').\n\n"
@@ -324,6 +334,7 @@ def encode_sections(
             num_epochs=num_epochs, output_checkpoint=adapted,
             gene_graph=gene_graph, gene_graph_list=gene_graph_list,
             init=init, verbose=verbose,
+            spatial_weight=spatial_weight, sharp_weight=sharp_weight,
         )
         current_checkpoint = adapted
 
@@ -370,8 +381,30 @@ def encode_sections(
         "gene_names_list": gene_names_list,
         "grn_attention": all_grn_attn,
         "seed": seed,
+        "niche_objective": {"name": niche_objective, "spatial_weight": spatial_weight,
+                            "sharp_weight": sharp_weight},
     }
     return sections, context
+
+
+def resolve_niche_objective(niche_objective, mode, spatial_weight=None, sharp_weight=None):
+    """Return the (spatial_weight, sharp_weight) for continual adaptation."""
+    from hebi.training.pretrain import SPATIAL_PRESET
+
+    if niche_objective not in NICHE_OBJECTIVES:
+        raise ValueError(f"niche_objective must be one of {NICHE_OBJECTIVES}, "
+                         f"got '{niche_objective}'")
+    if niche_objective == "original":
+        if spatial_weight or sharp_weight:
+            raise ValueError("spatial_weight / sharp_weight need niche_objective='spatial'")
+        return 0.0, 0.0
+    if mode != "continual":
+        raise ValueError(
+            "niche_objective='spatial' requires mode='continual': the spatial "
+            "terms act during training, and zero-shot encoding trains nothing.")
+    sw = SPATIAL_PRESET["spatial_weight"] if spatial_weight is None else float(spatial_weight)
+    hw = SPATIAL_PRESET["sharp_weight"] if sharp_weight is None else float(sharp_weight)
+    return sw, hw
 
 
 def cluster_sections(
@@ -694,6 +727,9 @@ def run_hebi(
     filter_min_counts: int = None,
     drop_unlabelled: bool = False,
     point_size: float = None,
+    niche_objective: str = "original",
+    spatial_weight: float = None,
+    sharp_weight: float = None,
 ):
     """All three stages in order. This is what the command line calls.
 
@@ -709,6 +745,8 @@ def run_hebi(
         output_dir=output_dir, output_checkpoint=output_checkpoint,
         device=device, seed=seed, verbose=verbose, preprocess=preprocess,
         filter_min_counts=filter_min_counts, drop_unlabelled=drop_unlabelled,
+        niche_objective=niche_objective, spatial_weight=spatial_weight,
+        sharp_weight=sharp_weight,
     )
 
     written = cluster_sections(
@@ -850,6 +888,17 @@ def build_parser():
                    help="One gene graph per section, for cross-platform runs "
                         "with differing panels.")
 
+    p.add_argument("--niche_objective", choices=list(NICHE_OBJECTIVES),
+                   default="original",
+                   help="'spatial' adds the spatial niche terms during continual "
+                        "adaptation (needs --mode continual; best with ~4096 "
+                        "METIS communities).")
+    p.add_argument("--spatial_weight", type=float, default=None,
+                   help="Override the preset spatial weight (with "
+                        "--niche_objective spatial).")
+    p.add_argument("--sharp_weight", type=float, default=None,
+                   help="Override the preset sharpness weight (with "
+                        "--niche_objective spatial).")
     p.add_argument("--lr", type=float, default=1e-4,
                    help="Learning rate for continual adaptation.")
     p.add_argument("--num_epochs", type=int, default=10,
@@ -946,6 +995,9 @@ def main(argv=None):
         filter_min_counts=args.filter_min_counts,
         drop_unlabelled=args.drop_unlabelled,
         point_size=args.point_size,
+        niche_objective=args.niche_objective,
+        spatial_weight=args.spatial_weight,
+        sharp_weight=args.sharp_weight,
     )
 
 

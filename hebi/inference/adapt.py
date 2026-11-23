@@ -30,8 +30,15 @@ def continual_adapt(
     gene_graph_list=None,
     init: str = "pretrained",
     verbose: int = 0,
+    spatial_weight: float = 0.0,
+    sharp_weight: float = 0.0,
 ):
     """Adapt a checkpoint to the sections in data_dir.
+
+    spatial_weight, sharp_weight:
+        optional spatially regularised niche objective (see
+        hebi.training.pretrain). 0 and 0 (default) give the objective used in
+        pretraining, unchanged.
 
     init:
         "pretrained"  load foundation weights, then re-initialise the
@@ -71,7 +78,12 @@ def continual_adapt(
         checkpoint_path=checkpoint_path,
         device=device,
         verbose=verbose,
+        spatial_weight=spatial_weight,
+        sharp_weight=sharp_weight,
     )
+    if trainer.spatial_active:
+        print(f"Spatial niche objective: spatial_weight={spatial_weight}, "
+              f"sharp_weight={sharp_weight}")
 
     trainer.discover_data_files()
     trainer.data_path = trainer.data_files[0]

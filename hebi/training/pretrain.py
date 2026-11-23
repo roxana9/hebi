@@ -45,6 +45,7 @@ from hebi.model.hebi import (
     NicheTransformerL2,
     GlobalMLPDecoder,
     hierarchy_forward,
+    niche_distances,
 )
 
 # Gradient scale from the niche pooler into the community representations
@@ -75,6 +76,45 @@ DEFAULT_LOSS_WEIGHTS = {
 }
 
 
+# Spatially regularised niche objective (optional; off unless spatial_weight or
+# sharp_weight > 0). Two terms on the soft niche assignment of each community,
+#     p_c = softmax(pool_mlp(u_c) / SPATIAL_TAU):
+#   sharp    mean entropy of p_c / log K: each community commits to one niche
+#   spatial  sum over adjacent communities (hop 1 in super_sp) of (1 - p_c . p_d),
+#            averaged: neighbouring communities share a niche
+# The spatial weight is 0 for the first SPATIAL_WARMUP[0] of the epochs and rises
+# linearly to its full value at SPATIAL_WARMUP[1].
+SPATIAL_TAU = 0.5
+SPATIAL_WARMUP = (0.15, 0.50)
+# Settings selected on SEA-AD MERFISH (use with METIS ~4096 communities).
+SPATIAL_PRESET = {"spatial_weight": 1.5, "sharp_weight": 2.0}
+
+
+def community_edges(super_sp):
+    """Undirected edges (i < j) between communities at hop distance 1."""
+    d = torch.nan_to_num(super_sp.float(), nan=1e9, posinf=1e9)
+    adj = torch.triu((d > 0.5) & (d < 1.5), diagonal=1)
+    return adj.nonzero(as_tuple=False)                      # [E, 2]
+
+
+def spatial_consistency_loss(p, present_idx, edges, n_comm):
+    """Mean disagreement 1 - p_c . p_d over community edges whose two ends are
+    both present in the batch. p is ordered as present_idx."""
+    pos = torch.full((n_comm,), -1, dtype=torch.long, device=p.device)
+    pos[present_idx] = torch.arange(present_idx.numel(), device=p.device)
+    a, b = pos[edges[:, 0]], pos[edges[:, 1]]
+    keep = (a >= 0) & (b >= 0)
+    if not keep.any():
+        return p.sum() * 0.0
+    return (1.0 - (p[a[keep]] * p[b[keep]]).sum(dim=-1)).mean()
+
+
+def assignment_entropy(p):
+    """Mean entropy of the soft assignments, normalised to [0, 1] by log K."""
+    h = -(p * torch.log(p + 1e-8)).sum(dim=1)
+    return h.mean() / float(np.log(p.size(1)))
+
+
 class Train:
     def __init__(
         self,
@@ -98,6 +138,8 @@ class Train:
         seed: int = 0,
         loss_weights: dict = None,
         verbose: int = 1,
+        spatial_weight: float = 0.0,
+        sharp_weight: float = 0.0,
     ):
         # --- Output ---
         # 1 prints per-slide progress, which is useful over a long
@@ -118,6 +160,12 @@ class Train:
                     f"Valid keys: {sorted(DEFAULT_LOSS_WEIGHTS)}"
                 )
             self.loss_weights.update(loss_weights)
+
+        # --- Spatial niche objective (off by default) ---
+        self.spatial_weight = float(spatial_weight)
+        self.sharp_weight = float(sharp_weight)
+        self.spatial_active = self.spatial_weight > 0 or self.sharp_weight > 0
+        self.comm_edges = None
 
         # --- Reproducibility ---
         self.seed = seed
@@ -203,6 +251,8 @@ class Train:
         self.loss_smooth_map_history = []
         self.loss_grn_history = []
         self.loss_coverage_history = []
+        self.loss_spatial_history = []
+        self.loss_sharp_history = []
 
     # ------------------------------------------------------------------
     # Reproducibility
@@ -259,6 +309,8 @@ class Train:
         self.super_sp_fixed = data["super_sp"].float().to(self.device)
         self.gene_ids = data["gene_ids"].long().to(self.device)  # [G_slide]
         self.meta = data.get("meta", {})
+        if self.spatial_active:
+            self.comm_edges = community_edges(self.super_sp_fixed)
 
         slide_genes = data.get("gene_symbols", None)
         if slide_genes is not None:
@@ -301,6 +353,10 @@ class Train:
             "avg_loss": avg_loss,
             "seed": self.seed,
             "loss_weights": self.loss_weights,
+            **({"niche_objective": {"spatial_weight": self.spatial_weight,
+                                    "sharp_weight": self.sharp_weight,
+                                    "tau": SPATIAL_TAU, "warmup": SPATIAL_WARMUP}}
+               if self.spatial_active else {}),
             "gene_embedder": self.gene_embedder.state_dict(),
             "gene_linear": self.gene_linear.state_dict(),
             "model_lvl0": self.model_lvl0.state_dict(),
@@ -486,6 +542,17 @@ class Train:
             float(self.num_prototypes_lvl2), device=self.device))
         return 1.0 - (entropy / max_entropy)
 
+    def spatial_weight_at(self, epoch: int) -> float:
+        """0 until SPATIAL_WARMUP[0] of the epochs, linear to spatial_weight at
+        SPATIAL_WARMUP[1], constant after."""
+        start, end = SPATIAL_WARMUP
+        f = epoch / max(self.num_epochs, 1)
+        if f <= start:
+            return 0.0
+        if f >= end:
+            return self.spatial_weight
+        return self.spatial_weight * (f - start) / (end - start)
+
     # ------------------------------------------------------------------
     # One epoch over ALL slides
     # ------------------------------------------------------------------
@@ -507,6 +574,9 @@ class Train:
         total_loss_smooth_epoch = 0.0
         total_loss_grn = 0.0
         total_loss_coverage_epoch = 0.0
+        total_loss_spatial_epoch = 0.0
+        total_loss_sharp_epoch = 0.0
+        lam_sp = self.spatial_weight_at(epoch) if self.spatial_active else 0.0
 
         start_time = time.time()
         random.shuffle(self.data_files)
@@ -615,10 +685,34 @@ class Train:
 
                 # L1 (communities of this section) + L2 (niches)
                 node2comm_batch = self.node2comm_fixed[target_node_indices_global]
-                z1_batch, z2_batch, z2_attn_probs, S_matrix = hierarchy_forward(
-                    self.model_lvl1, self.pooler_lvl2, self.model_lvl2,
-                    z0_batch, node2comm_batch, self.super_sp_fixed,
-                )
+                loss_spatial = torch.tensor(0.0, device=self.device)
+                loss_sharp = torch.tensor(0.0, device=self.device)
+                if not self.spatial_active:
+                    z1_batch, z2_batch, z2_attn_probs, S_matrix = hierarchy_forward(
+                        self.model_lvl1, self.pooler_lvl2, self.model_lvl2,
+                        z0_batch, node2comm_batch, self.super_sp_fixed,
+                    )
+                else:
+                    # hierarchy_forward written out, so the present communities
+                    # and their representations reach the spatial terms.
+                    z1_batch, aux = self.model_lvl1(
+                        z0_batch, node2comm_batch, self.super_sp_fixed)
+                    present = aux["present"]
+                    reps_present = aux["reps"][present]
+                    C_L2, S_matrix = self.pooler_lvl2(reps_present)
+                    dist, absent = niche_distances(aux["d"][:, present], S_matrix)
+                    z2_batch, z2_attn_probs = self.model_lvl2(z1_batch, C_L2, dist, absent)
+
+                    # soft assignment, with the pooler's own gradient scale
+                    gs = getattr(self.pooler_lvl2, "grad_scale", 1.0)
+                    c = (gs * reps_present + (1.0 - gs) * reps_present.detach()
+                         if gs != 1.0 else reps_present)
+                    p_soft = F.softmax(self.pooler_lvl2.pool_mlp(c) / SPATIAL_TAU, dim=-1)
+                    present_idx = present.nonzero(as_tuple=False).squeeze(1)
+                    loss_spatial = spatial_consistency_loss(
+                        p_soft, present_idx, self.comm_edges,
+                        self.super_sp_fixed.shape[0])
+                    loss_sharp = assignment_entropy(p_soft)
                 loss_coverage = self.proto_coverage_loss(z2_attn_probs)
 
                 # Decoder
@@ -654,6 +748,9 @@ class Train:
                     loss_total = loss_base + w["GRN"] * loss_grn
                 else:
                     loss_total = loss_base
+                if self.spatial_active:
+                    loss_total = (loss_total + lam_sp * loss_spatial
+                                  + self.sharp_weight * loss_sharp)
 
                 # Backprop
                 self.optimizer.zero_grad(set_to_none=True)
@@ -680,6 +777,8 @@ class Train:
                 total_loss_smooth_epoch += loss_smooth.item()
                 total_loss_coverage_epoch += loss_coverage.item()
                 total_loss_grn += loss_grn.item()
+                total_loss_spatial_epoch += loss_spatial.item()
+                total_loss_sharp_epoch += loss_sharp.item()
                 total_batches += 1
 
                 if (i + 1) % 10 == 0:
@@ -706,6 +805,8 @@ class Train:
         avg_loss_smooth = total_loss_smooth_epoch / total_batches
         avg_loss_grn = total_loss_grn / total_batches
         avg_loss_coverage = total_loss_coverage_epoch / total_batches
+        avg_loss_spatial = total_loss_spatial_epoch / total_batches
+        avg_loss_sharp = total_loss_sharp_epoch / total_batches
 
         elapsed = time.time() - start_time
 
@@ -720,10 +821,15 @@ class Train:
             print(f"   Avg Smooth:     {avg_loss_smooth:.4f}")
             print(f"   Avg GRN:        {avg_loss_grn:.4f}")
             print(f"   Avg Coverage:   {avg_loss_coverage:.4f}")
+            if self.spatial_active:
+                print(f"   Avg Spatial:    {avg_loss_spatial:.4f}  (weight {lam_sp:.2f})")
+                print(f"   Avg Sharp:      {avg_loss_sharp:.4f}")
             print(f"   GPU:            {self.gpu_usage_str()}")
         else:
+            extra = (f"  spatial {avg_loss_spatial:.3f} (w {lam_sp:.2f})  "
+                     f"sharp {avg_loss_sharp:.3f}" if self.spatial_active else "")
             print(f"  epoch {epoch:>3}  loss {avg_loss_total:7.4f}  "
-                  f"({elapsed:.0f}s)")
+                  f"({elapsed:.0f}s){extra}")
 
         # Store for plotting
         self.loss_total_history.append(avg_loss_total)
@@ -735,6 +841,8 @@ class Train:
         self.loss_smooth_map_history.append(avg_loss_smooth)
         self.loss_grn_history.append(avg_loss_grn)
         self.loss_coverage_history.append(avg_loss_coverage)
+        self.loss_spatial_history.append(avg_loss_spatial)
+        self.loss_sharp_history.append(avg_loss_sharp)
 
         return avg_loss_total
 
@@ -850,6 +958,12 @@ def build_parser():
 
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--spatial_weight", type=float, default=0.0,
+                   help="Weight of the spatial niche-consistency term (0 = off). "
+                        f"Preset: {SPATIAL_PRESET['spatial_weight']}.")
+    p.add_argument("--sharp_weight", type=float, default=0.0,
+                   help="Weight of the community assignment-sharpness term "
+                        f"(0 = off). Preset: {SPATIAL_PRESET['sharp_weight']}.")
     p.add_argument("--plot_losses", action="store_true",
                    help="Show the loss curves when training finishes.")
     return p
@@ -896,6 +1010,8 @@ def main(argv=None):
         device=args.device,
         seed=args.seed,
         loss_weights=loss_weights,
+        spatial_weight=args.spatial_weight,
+        sharp_weight=args.sharp_weight,
     )
 
     print("Loss weights: " +

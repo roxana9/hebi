@@ -21,6 +21,20 @@ Changes from niche_hierarchy_reviewed.py
      kept and flagged by default. tiny_policy="absorb_prototype" (sensitivity
      only) attaches each tiny prototype, as a whole, to its nearest compatible
      non-tiny prototype; targets are chosen simultaneously, before the tree.
+  5. Merge rule (optional). merge_rule="original" (default) merges by average
+     linkage on d. merge_rule="size_space" keeps the same distances and guards
+     but picks the next merge by
+
+         cost(a, b) = dbar(a, b) * size(a, b)**gamma * (1 - lam * contact(a, b))
+
+     size     harmonic mean of the two cluster masses, 2 m_a m_b / (m_a + m_b),
+              divided by the mean leaf mass; mass = cell share per section,
+              averaged over sections (Ward-like: merging a small cluster is cheap,
+              merging two large ones is costly).
+     contact  spatial contact on a k-nearest-neighbour cell graph:
+              (edges a->b + edges b->a) / 2 divided by min(edges out of a,
+              edges out of b); near 1 when one cluster lies inside the other.
+     gamma = lam = 0 gives the original merge order.
 
 Construction never uses FIDE or JSD.
 """
@@ -37,6 +51,10 @@ MINOR = 0.15
 DELTA_PI = 0.20
 TINY_PREVALENCE = 0.005
 EPS = 1e-12
+MERGE_RULES = ("original", "size_space")
+MERGE_GAMMA = 1.0
+MERGE_LAM = 0.5
+MERGE_KNN = 10
 
 
 # -----------------------------------------------------------------------------
@@ -125,6 +143,35 @@ def _effective_number(labels_per_section):
     return per, float(np.exp(-(nz * np.log(nz)).sum())), pooled, vocab
 
 
+def knn_edges(coords, k=MERGE_KNN):
+    """Directed k-nearest-neighbour edges (i -> j) on the first two coordinates."""
+    from sklearn.neighbors import NearestNeighbors
+    xy = np.asarray(coords, dtype=np.float64)[:, :2]
+    k = min(int(k), len(xy) - 1)
+    if k < 1:
+        return np.zeros((0, 2), dtype=np.int64)
+    idx = NearestNeighbors(n_neighbors=k + 1).fit(xy).kneighbors(xy, return_distance=False)
+    return np.stack([np.repeat(np.arange(len(xy)), k), idx[:, 1:].ravel()], axis=1)
+
+
+def leaf_mass_and_contacts(labels, occupied, section_sizes, edges):
+    """Section-averaged cell share of each occupied prototype, and pooled directed
+    kNN edge counts between prototypes (used by merge_rule="size_space")."""
+    index = {p: i for i, p in enumerate(occupied)}
+    P, S = len(occupied), len(labels)
+    mass = np.zeros(P)
+    contacts = np.zeros((P, P))
+    for s, lab in enumerate(labels):
+        li = np.array([index.get(v, -1) for v in lab], dtype=np.int64)
+        mass += np.bincount(li[li >= 0], minlength=P) / (S * float(section_sizes[s]))
+        e = edges[s]
+        if len(e):
+            a, b = li[e[:, 0]], li[e[:, 1]]
+            ok = (a >= 0) & (b >= 0)
+            np.add.at(contacts, (a[ok], b[ok]), 1.0)
+    return mass, contacts
+
+
 # -----------------------------------------------------------------------------
 # Per-section prototype vectors
 # -----------------------------------------------------------------------------
@@ -200,7 +247,13 @@ def prototype_table(labels, section_names, minor=MINOR, tiny_prevalence=TINY_PRE
 # k <= m: constrained average-linkage tree
 # -----------------------------------------------------------------------------
 def merge_tree(occupied, support, pi, tiny, prototype_to_col, C0, Cs, attn,
-               section_sizes, section_names, delta_pi=DELTA_PI, tiny_policy="keep"):
+               section_sizes, section_names, delta_pi=DELTA_PI, tiny_policy="keep",
+               merge_rule="original", leaf_mass=None, contacts=None,
+               gamma=MERGE_GAMMA, lam=MERGE_LAM):
+    if merge_rule not in MERGE_RULES:
+        raise ValueError(f"merge_rule must be one of {MERGE_RULES}")
+    if merge_rule == "size_space" and (leaf_mass is None or contacts is None):
+        raise ValueError("merge_rule='size_space' needs leaf_mass and contacts")
     S = len(section_sizes)
     B = [(np.asarray(attn[s], np.float64).T @ np.asarray(attn[s], np.float64))
          / float(section_sizes[s]) for s in range(S)]
@@ -306,18 +359,40 @@ def merge_tree(occupied, support, pi, tiny, prototype_to_col, C0, Cs, attn,
         return float(np.mean([leaf_distance[frozenset((x, y))]
                               for x in clusters[a] for y in clusters[b]]))
 
+    occ_index = {p: i for i, p in enumerate(occupied)}
+    m_ref = float(np.mean(leaf_mass)) + EPS if leaf_mass is not None else 1.0
+
+    def _ix(a):
+        return [occ_index[p] for p in clusters[a]]
+
+    def size_term(a, b):
+        ma, mb = leaf_mass[_ix(a)].sum(), leaf_mass[_ix(b)].sum()
+        return float(2.0 * ma * mb / (ma + mb + EPS)) / m_ref
+
+    def contact(a, b):
+        ia, ib = _ix(a), _ix(b)
+        ab = 0.5 * (contacts[np.ix_(ia, ib)].sum() + contacts[np.ix_(ib, ia)].sum())
+        return float(ab / (min(contacts[ia].sum(), contacts[ib].sum()) + EPS))
+
+    def merge_cost(a, b):
+        d = cluster_distance(a, b)
+        if merge_rule == "original":
+            return d, d
+        return d * size_term(a, b) ** gamma * (1.0 - lam * contact(a, b)), d
+
     while True:
         best = None
         names = sorted(clusters, key=natural_key)
         for a, b in combinations(names, 2):
             if cluster_type[a] != cluster_type[b] or not admissible(a, b):
                 continue
-            cand = (cluster_distance(a, b), natural_key(a), natural_key(b), a, b)
+            cost, d = merge_cost(a, b)
+            cand = (cost, natural_key(a), natural_key(b), a, b, d)
             if best is None or cand[:3] < best[:3]:
                 best = cand
         if best is None:
             break
-        dist, _, _, a, b = best
+        cost, _, _, a, b, dist = best
         members = sorted(clusters[a] + clusters[b], key=natural_key)
         new = "+".join(members)
         pis = [pi[p] for p in members]
@@ -326,6 +401,11 @@ def merge_tree(occupied, support, pi, tiny, prototype_to_col, C0, Cs, attn,
         fp = frozenset((clusters[a][0], clusters[b][0])) if single else None
         row = {"n_after": len(clusters) - 1, "merged_a": a, "merged_b": b,
                "distance": round(dist, 6),
+               **({"cost": round(cost, 6), "size_term": round(size_term(a, b), 4),
+                   "contact": round(contact(a, b), 4),
+                   "mass_a": round(float(leaf_mass[_ix(a)].sum()), 4),
+                   "mass_b": round(float(leaf_mass[_ix(b)].sum()), 4)}
+                  if merge_rule == "size_space" else {}),
                "support_type": "+".join(section_names[s] for s in sorted(cluster_type[a])),
                "pi_diameter": round(diam, 4),
                "worst_section": section_names[worst[fp]] if single else None}
@@ -421,7 +501,9 @@ def build_niche_hierarchy(sections, section_names, C0, Cs=None, attn=None, z2=No
                           proto_key="prototypes", prototype_ids=None, k_list=(7, 10, 15),
                           minor=MINOR, delta_pi=DELTA_PI, tiny_policy="keep",
                           tiny_prevalence=TINY_PREVALENCE, prefix="niche_k", seed=0,
-                          max_fit=100_000, write_obs=True, strict=True, verbose=True):
+                          max_fit=100_000, write_obs=True, strict=True, verbose=True,
+                          merge_rule="original", merge_gamma=MERGE_GAMMA,
+                          merge_lam=MERGE_LAM, merge_knn=MERGE_KNN, coord_key="spatial"):
     n_sections = len(sections)
     if n_sections == 0 or len(section_names) != n_sections:
         raise ValueError("section_names must have one entry per section")
@@ -467,15 +549,23 @@ def build_niche_hierarchy(sections, section_names, C0, Cs=None, attn=None, z2=No
 
     ptab, occupied, support, pi, tiny = prototype_table(labels, section_names, minor,
                                                         tiny_prevalence)
+    leaf_mass = contacts = None
+    if merge_rule == "size_space":
+        missing = [section_names[s] for s, a in enumerate(sections) if coord_key not in a.obsm]
+        if missing:
+            raise KeyError(f"merge_rule='size_space' needs obsm[{coord_key!r}]; missing in {missing}")
+        edges = [knn_edges(a.obsm[coord_key], merge_knn) for a in sections]
+        leaf_mass, contacts = leaf_mass_and_contacts(labels, occupied, section_sizes, edges)
     partitions, merges, blocked, absorbed, r_diag = merge_tree(
         occupied, support, pi, tiny, prototype_to_col, C0, Cs, attn, section_sizes,
-        section_names, delta_pi, tiny_policy)
+        section_names, delta_pi, tiny_policy, merge_rule=merge_rule,
+        leaf_mass=leaf_mass, contacts=contacts, gamma=merge_gamma, lam=merge_lam)
     m_native = len(occupied)
     m = max(partitions)
     k_min = min(partitions)
     if verbose:
         print(f"occupied prototypes = {m_native}; tiny = {sorted(tiny, key=natural_key)}; "
-              f"base leaves m = {m} (tiny_policy={tiny_policy}); "
+              f"base leaves m = {m} (tiny_policy={tiny_policy}, merge_rule={merge_rule}); "
               f"coarsening feasible for {k_min} <= k <= {m}")
 
     output_labels, summary = {}, []
@@ -656,12 +746,16 @@ def evaluate(sections, keys, section_names, graphs=None, graph_key=None, knn=Non
 def assign_niches(sections, ctx, processed_dir, section_files, n_niches=7,
                   section_names=None, tiny_policy="keep", delta_pi=DELTA_PI,
                   minor=MINOR, prefix="niche_k", cache_dir=None, seed=0,
-                  verbose=False, return_details=False):
+                  verbose=False, return_details=False, merge_rule="original",
+                  merge_gamma=MERGE_GAMMA, merge_lam=MERGE_LAM, merge_knn=MERGE_KNN):
     """Assign HEBI niches at the requested resolution(s), in place.
 
     sections       list of AnnData returned by encode_sections (same order as section_files)
     ctx            context returned by encode_sections (uses ctx["trainer"])
     n_niches       int or list of ints; total number of niches across all sections
+    merge_rule     "original" (default, average linkage) or "size_space" (merge cost
+                   scaled by niche size and lowered by spatial contact; needs
+                   obsm["spatial"]). merge_gamma, merge_lam, merge_knn tune it.
     Writes obs[f"{prefix}{k}"] (integer labels) and obs[f"{prefix}{k}_path"]
     (prototype ancestry) for every k.
 
@@ -717,7 +811,9 @@ def assign_niches(sections, ctx, processed_dir, section_files, n_niches=7,
         attn=get_obsm(sections, "niche_attention"),
         z2=get_obsm(sections, "z2_enc"),
         proto_key="prototypes_enc", k_list=ks, minor=minor, delta_pi=delta_pi,
-        tiny_policy=tiny_policy, prefix=prefix, seed=seed, verbose=verbose)
+        tiny_policy=tiny_policy, prefix=prefix, seed=seed, verbose=verbose,
+        merge_rule=merge_rule, merge_gamma=merge_gamma, merge_lam=merge_lam,
+        merge_knn=merge_knn)
 
     s = hier["summary"]
     for k in [k for k in ks if k in s.index]:

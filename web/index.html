@@ -1,0 +1,2002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HEBI, the living tissue explorer</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper: #f2eff7;       /* lilac mist */
+  --panel: #ffffff;
+  --panel-2: #faf8fd;
+  --ink: #241d33;         /* plum ink */
+  --ink-2: #5c5470;
+  --ink-3: #8e86a2;
+  --line: #e2dcec;
+  --hx: #6c5899;          /* dusty purple */
+  --hx-deep: #463669;
+  --hx-tint: #eee8f7;
+  --lilac: #b7a6d8;
+  --eo: #b9629a;          /* orchid accent */
+  --eo-tint: #f6e8f1;
+  --field: #1b1726;       /* aubergine viewport */
+  --field-ink: #ece7f6;
+  --field-ink-2: #a79fbd;
+  --frost: #9cc3ea;
+  --frost-deep: #4f7fb6;
+  --ember: #f08a4b;
+  --ember-deep: #c2456e;
+  --warn-bg: #fbf3e4;
+  --warn-ink: #6b4a00;
+  --sans: "Familjen Grotesk", "Avenir Next", "Segoe UI Variable", system-ui, -apple-system, Arial, sans-serif;
+  --serif: var(--sans);
+  --r-s: 6px;
+  --r-m: 10px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: var(--sans); color: var(--ink); background: var(--paper);
+  font-size: 15px; line-height: 1.45; -webkit-font-smoothing: antialiased;
+}
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--hx); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- top bar ---------- */
+.bar {
+  display: flex; align-items: center; gap: 16px; padding: 12px 24px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.mark { display: flex; align-items: baseline; gap: 10px; margin-right: auto; min-width: 0; }
+.mark b { font-family: var(--sans); font-weight: 700; font-size: 22px; letter-spacing: .06em; color: var(--hx-deep); }
+.mark span { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn {
+  border: 1px solid var(--line); background: var(--panel); border-radius: var(--r-s);
+  padding: 7px 14px; font-weight: 600; font-size: 14px;
+}
+.btn:hover { border-color: var(--hx); color: var(--hx-deep); }
+.btn.primary { background: var(--hx); border-color: var(--hx); color: #fff; }
+.btn.primary:hover { background: var(--hx-deep); color: #fff; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.menu { position: relative; }
+.menu-list {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 250px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-m);
+  box-shadow: 0 12px 32px rgba(36, 29, 51, .16); padding: 6px;
+}
+.menu-list a, .menu-list button {
+  display: block; width: 100%; text-align: left; border: 0; background: none;
+  padding: 9px 12px; border-radius: var(--r-s); color: var(--ink); text-decoration: none; font-size: 14px;
+}
+.menu-list a:hover, .menu-list button:hover { background: var(--hx-tint); }
+.menu-list small { display: block; color: var(--ink-3); }
+
+/* ---------- start screen ---------- */
+.start { max-width: 1320px; padding: 40px 48px 64px; }
+.start h1 {
+  font-weight: 600; font-size: clamp(28px, 3.1vw, 40px); line-height: 1.08; letter-spacing: -.022em;
+  margin: 0 0 12px; max-width: 19em; color: var(--ink);
+}
+.start .lede { font-size: 16.5px; color: var(--ink-2); max-width: 66ch; margin: 0; }
+.bench { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 36px; margin-top: 34px; align-items: start; }
+.protocol {
+  position: sticky; top: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 6px 20px 18px;
+}
+.protocol section { padding: 16px 0; border-bottom: 1px solid #ece6f4; }
+.protocol section:last-of-type { border-bottom: 0; }
+.protocol h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--hx-deep); letter-spacing: -.005em; }
+.protocol .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; margin: 0; }
+.protocol .opts .wide { grid-column: 1 / -1; }
+.protocol .field input, .protocol .field select { width: 100%; min-width: 0; }
+.protocol details.more { margin: 0; }
+.protocol details.more .opts { margin-top: 14px; grid-template-columns: 1fr; }
+.stagecol { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.slide {
+  position: relative; display: grid; grid-template-columns: 150px 1fr; min-height: 250px;
+  border-radius: 14px; background: linear-gradient(180deg, #fff, var(--panel-2));
+  border: 1px solid #d8cfe8; box-shadow: 0 1px 0 #fff inset;
+  overflow: hidden; transition: border-color .15s, box-shadow .15s;
+}
+.slide.over { border-color: var(--hx); box-shadow: 0 0 0 4px var(--hx-tint); }
+.slide-label {
+  background: repeating-linear-gradient(135deg, #efeaf6 0 3px, #e8e1f2 3px 6px);
+  border-right: 1px solid #d8cfe8; padding: 20px 16px; display: flex; flex-direction: column; gap: 6px;
+}
+.slide-label b { font-size: 22px; font-weight: 700; letter-spacing: .06em; color: var(--hx-deep); line-height: 1; }
+.slide-label span { font-size: 13px; color: var(--ink-2); }
+.slide-label .rule { height: 1px; background: #cfc4e0; margin: 6px 0; }
+.slide-glass { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: center; }
+.slide-glass canvas { width: 100%; height: 250px; display: block; opacity: 0; transition: opacity 1.4s ease; }
+.slide-glass canvas.on { opacity: 1; }
+.drop-copy { padding: 24px 8px 24px 32px; }
+.drop-copy strong { display: block; font-size: 20px; margin-bottom: 4px; }
+.drop-copy p { margin: 0 0 14px; color: var(--ink-2); }
+.chosen { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-m); padding: 14px 16px; }
+.chosen ul { list-style: none; margin: 0 0 12px; padding: 0; }
+.chosen li { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; border-bottom: 1px solid #f0ecf6; font-size: 14px; }
+.chosen li b { font-weight: 600; overflow-wrap: anywhere; }
+.chosen li span { color: var(--ink-3); margin-left: auto; white-space: nowrap; }
+.chosen .foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; }
+.chosen .foot p { margin: 0; color: var(--ink-2); font-size: 14px; max-width: 54ch; }
+.need { margin: 14px 2px 0; color: var(--ink-2); font-size: 14px; }
+.need code { font-family: inherit; background: #ece6f6; padding: 1px 5px; border-radius: 4px; }
+.opts { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: end; margin-top: 26px; }
+.field { display: flex; flex-direction: column; gap: 5px; font-size: 14px; }
+.field > span { color: var(--ink-2); }
+.field input, .field select {
+  border: 1px solid var(--line); border-radius: var(--r-s); padding: 7px 10px; background: var(--panel); min-width: 120px;
+}
+details.more { margin-top: 18px; }
+details.more > summary { cursor: pointer; color: var(--hx-deep); font-weight: 600; font-size: 14px; width: fit-content; }
+details.more .opts { margin-top: 14px; }
+.demo-row { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.demo-row p { margin: 0; color: var(--ink-3); font-size: 13.5px; }
+.notice {
+  border-radius: var(--r-m); padding: 12px 16px; margin: 0 0 20px; font-size: 14px;
+  background: var(--warn-bg); color: var(--warn-ink); border: 1px solid #ecd9a4;
+}
+.notice.err { background: #fdecec; color: #7a1b1b; border-color: #efc1c1; }
+.notice b { font-weight: 700; }
+
+/* ---------- progress ---------- */
+.progress {
+  max-width: 1180px; padding: 48px 48px 64px; display: grid;
+  grid-template-columns: minmax(0, 560px) minmax(0, 1fr); column-gap: 48px; align-content: start;
+}
+.progress h2 { font-size: 30px; margin: 0 0 6px; font-weight: 600; letter-spacing: -.02em; }
+.progress .sub { color: var(--ink-2); margin: 0 0 28px; }
+.steps { list-style: none; margin: 0 0 24px; padding: 0; }
+.steps li {
+  display: flex; align-items: center; gap: 14px; padding: 11px 0; color: var(--ink-3);
+  border-bottom: 1px solid var(--line);
+}
+.steps li i {
+  flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line);
+  display: grid; place-items: center; font-style: normal; font-size: 12px; font-weight: 700;
+}
+.steps li.done { color: var(--ink); }
+.steps li.done i { background: var(--hx); border-color: var(--hx); color: #fff; }
+.steps li.now { color: var(--ink); font-weight: 600; }
+.steps li.now i { border-color: var(--hx); border-top-color: transparent; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.uploadbar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin: 0 0 24px; }
+.uploadbar div { height: 100%; width: 0; background: var(--hx); transition: width .2s; }
+.runmeter { margin: 0 0 22px; }
+.runmeter-text { display: flex; justify-content: space-between; gap: 16px; font-size: 14px; color: var(--ink-2); margin-bottom: 7px; }
+.runmeter-text #runLeft { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.runmeter-bar { height: 10px; border-radius: 5px; background: #dfe9e2; overflow: hidden; }
+.runmeter-bar div { height: 100%; width: 0; border-radius: 5px; background: linear-gradient(90deg, #5abfae, #147d79); transition: width .8s ease; }
+.runmeter.hot .runmeter-bar div { background: linear-gradient(90deg, #ffd08a, var(--ember), var(--ember-deep)); }
+details.log summary { cursor: pointer; color: var(--ink-2); font-size: 14px; }
+details.log pre {
+  margin: 10px 0 0; padding: 12px; background: var(--field); color: #dcd5ea; border-radius: var(--r-s);
+  font-size: 12px; line-height: 1.5; max-height: 260px; overflow: auto; white-space: pre-wrap;
+}
+
+/* ---------- explorer ---------- */
+.app { padding: 18px 24px 40px; }
+.facts { display: flex; flex-wrap: wrap; gap: 6px 26px; margin: 0 0 14px; color: var(--ink-2); font-size: 14px; }
+.facts b { color: var(--ink); font-weight: 600; }
+.demo-tag { background: var(--eo-tint); color: #7d2f62; border-radius: 99px; padding: 1px 12px; font-weight: 600; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: center; margin: 0 0 14px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-s); overflow: hidden; background: var(--panel); }
+.seg button { border: 0; background: none; padding: 7px 14px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.seg button[aria-pressed="true"] { background: var(--hx); color: #fff; }
+.genebox { position: relative; }
+.genebox input {
+  border: 1px solid var(--line); border-radius: var(--r-s); padding: 7px 12px; width: 210px; background: var(--panel);
+}
+.suggest {
+  position: absolute; z-index: 25; left: 0; top: calc(100% + 4px); width: 100%; max-height: 260px; overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-s);
+  box-shadow: 0 12px 28px rgba(36, 29, 51, .16); padding: 4px; margin: 0; list-style: none;
+}
+.suggest li { padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+.suggest li.on, .suggest li:hover { background: var(--hx-tint); }
+.kctl { display: flex; align-items: center; gap: 10px; margin-left: auto; font-size: 14px; color: var(--ink-2); }
+.kctl output { color: var(--ink); font-weight: 700; min-width: 2ch; text-align: right; }
+.kctl input[type=range] { accent-color: var(--hx); width: 170px; }
+.kctl.nk { margin-left: 0; }
+.kctl select { border: 1px solid var(--line); border-radius: var(--r-s); padding: 6px 8px; background: var(--panel); }
+
+.grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+.view {
+  position: relative; background: var(--field); border-radius: var(--r-m); overflow: hidden;
+  height: clamp(400px, 66vh, 760px);
+}
+.view canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.view canvas.ov { touch-action: none; cursor: grab; }
+.view canvas.ov.lasso { cursor: crosshair; }
+.view-head {
+  position: absolute; z-index: 5; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; pointer-events: none;
+  background: linear-gradient(180deg, rgba(27, 23, 38, .94), rgba(27, 23, 38, 0));
+}
+.view-head h3 { margin: 0 auto 0 2px; font-size: 14px; font-weight: 600; color: var(--field-ink); }
+.view-head h3 small { font-weight: 400; color: var(--field-ink-2); font-size: 13px; margin-left: 6px; }
+.tool {
+  pointer-events: auto; border: 1px solid #3d3452; background: rgba(36, 30, 52, .9); color: var(--field-ink);
+  border-radius: var(--r-s); padding: 4px 10px; font-size: 13px;
+}
+.tool:hover { border-color: var(--lilac); }
+.tool[aria-pressed="true"] { background: var(--eo); border-color: var(--eo); color: #fff; }
+.tool:focus-visible { outline-color: #b8b1ff; }
+.scale {
+  position: absolute; z-index: 5; left: 12px; bottom: 12px; color: var(--field-ink); font-size: 12px;
+  background: rgba(27, 23, 38, .82); padding: 8px 10px; border-radius: var(--r-s);
+}
+.scale .ramp { width: 150px; height: 8px; border-radius: 4px; margin: 5px 0 3px; }
+.scale .ends { display: flex; justify-content: space-between; color: var(--field-ink-2); }
+.view-msg { position: absolute; inset: 0; display: grid; place-items: center; color: var(--field-ink-2); padding: 24px; text-align: center; }
+.hint { margin: 10px 2px 0; color: var(--ink-3); font-size: 13px; grid-column: 1 / 3; }
+.grid.multi #tissueView { grid-column: 1 / 3; grid-row: 1; }
+.grid.multi #embView { grid-column: 1 / 3; grid-row: 2; height: clamp(320px, 46vh, 520px); }
+.grid.multi .side { grid-column: 3; grid-row: 1 / span 2; }
+.grid.multi .hint { grid-row: 3; }
+
+.side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-m); padding: 14px; }
+.card h4 { margin: 0 0 10px; font-size: 15px; font-weight: 700; }
+.card h4 small { font-weight: 400; color: var(--ink-3); margin-left: 6px; }
+.clusters { list-style: none; margin: 0; padding: 0; max-height: 330px; overflow: auto; }
+.clusters button {
+  display: grid; grid-template-columns: 14px 1fr auto 46px; gap: 10px; align-items: center; width: 100%;
+  border: 0; background: none; padding: 6px 8px; border-radius: var(--r-s); text-align: left; font-size: 14px;
+}
+.clusters button:hover { background: #f4f0f9; }
+.clusters button[aria-pressed="true"] { background: var(--hx-tint); font-weight: 600; }
+.clusters .sw { width: 14px; height: 14px; border-radius: 50%; }
+.clusters .tag { display: block; font-size: 12px; font-weight: 400; color: var(--ink-3); line-height: 1.3; }
+.clusters .tag.solo { color: #7d2f62; }
+.trainopts[hidden] { display: none !important; }
+.field small { color: var(--ink-3); font-size: 12px; max-width: 30ch; }
+.clusters .ct { color: var(--ink-2); }
+.clusters .pc { color: var(--ink-3); text-align: right; }
+.plain { margin: 0; color: var(--ink-2); font-size: 14px; }
+.slides { list-style: none; margin: 0; padding: 0; }
+.slides li + li { margin-top: 12px; }
+.slides .nm { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
+.slides .nm b { font-weight: 600; overflow-wrap: anywhere; }
+.slides .nm span { margin-left: auto; color: var(--ink-3); white-space: nowrap; }
+.slides .sw { flex: none; width: 10px; height: 10px; border-radius: 50%; align-self: center; }
+.slides .mix { display: flex; gap: 2px; height: 12px; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.slides .mix i { display: block; height: 100%; min-width: 1px; }
+.linkbtn { border: 0; background: none; padding: 0; color: var(--hx-deep); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+table.markers { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.markers th { text-align: right; font-weight: 600; color: var(--ink-3); font-size: 12px; padding: 0 0 6px 8px; }
+table.markers th:first-child { text-align: left; padding-left: 0; }
+table.markers td { padding: 4px 0 4px 8px; text-align: right; border-top: 1px solid #f0ecf6; }
+table.markers td:first-child { text-align: left; padding-left: 0; }
+.markers-wrap { max-height: 320px; overflow: auto; }
+.selbar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 10px 0; gap: 2px; background: var(--panel); }
+.selbar i { display: block; height: 100%; min-width: 2px; }
+.sel-list { margin: 0 0 10px; padding: 0; list-style: none; font-size: 14px; color: var(--ink-2); }
+
+.below { margin-top: 14px; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+.dot-scroll { overflow-x: auto; }
+.dot-legend { display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; margin-top: 8px; font-size: 13px; color: var(--ink-2); }
+.dot-legend .ramp { display: inline-block; width: 110px; height: 8px; border-radius: 4px; vertical-align: middle; margin: 0 6px; }
+.dot-legend svg { vertical-align: middle; }
+svg text { font-family: var(--sans); }
+dl.run { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; }
+dl.run dt { color: var(--ink-3); }
+dl.run dd { margin: 0; }
+
+.tip {
+  position: fixed; z-index: 60; pointer-events: none; background: var(--ink); color: #fff; font-size: 13px;
+  padding: 6px 10px; border-radius: var(--r-s); box-shadow: 0 6px 18px rgba(0, 0, 0, .3); max-width: 260px;
+}
+.tip i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+.tip span { color: #c4bbd6; }
+.busy { opacity: .55; pointer-events: none; }
+
+@media (max-width: 1180px) {
+  .grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .side, .grid.multi .side { grid-column: 1 / -1; grid-row: auto; flex-direction: row; flex-wrap: wrap; }
+  .grid.multi .hint { grid-row: auto; }
+  .side .card { flex: 1 1 300px; }
+  .below { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .bar { padding: 10px 14px; flex-wrap: wrap; }
+  .app { padding: 14px; }
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .grid.multi #tissueView, .grid.multi #embView { grid-column: 1; grid-row: auto; }
+  .hint { grid-column: 1; }
+  .view { height: 62vh; }
+  .slide { grid-template-columns: 1fr; }
+  .slide-glass { grid-template-columns: 1fr; }
+  .slide-glass canvas { height: 190px; }
+  .drop-copy { padding: 22px 20px 0; }
+  .slide-label { border-right: 0; border-bottom: 1px solid #d8cfe8; flex-direction: row; align-items: baseline; }
+  .slide-label .rule { display: none; }
+  .kctl { margin-left: 0; }
+  .start { padding-top: 32px; }
+}
+/* ---------- model state: frozen (zero-shot) or warming (continual) ---------- */
+.mode-card {
+  position: relative; margin-top: 18px; height: 300px; border-radius: 12px; overflow: hidden;
+  border: 1px solid #d8cfe8; transition: border-color .6s;
+}
+.mode-card.hot { border-color: #eab9a8; }
+.mode-card.cold { border-color: #c4d5ec; }
+.mode-card canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.mode-state {
+  position: absolute; left: 22px; bottom: 18px; margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -.02em;
+  color: var(--ink); transition: color .6s;
+}
+.mode-card.hot .mode-state { color: #8f2f4e; }
+.mode-card.cold .mode-state { color: #3b5f8c; }
+.mode-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 10px; background: var(--hx-tint); margin: 0 0 12px; }
+.mode-pick button {
+  border: 0; background: none; border-radius: 7px; padding: 8px 10px; font-weight: 600; font-size: 14px; color: var(--ink-2);
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px; transition: background .25s, color .25s;
+}
+.mode-pick button svg { width: 15px; height: 15px; }
+.mode-pick button[aria-pressed="true"] { background: var(--panel); color: var(--ink); }
+.mode-pick button[data-mode="zero_shot"][aria-pressed="true"] { color: var(--frost-deep); }
+.mode-pick button[data-mode="continual"][aria-pressed="true"] { color: var(--ember-deep); }
+.protocol #modeNote { margin: 0 0 12px; font-size: 13.5px; }
+.field.mode-hidden { display: none; }
+
+.stage-sm { height: 120px; border-radius: 12px; overflow: hidden; margin: 0 0 22px; border: 1px solid var(--line); }
+.progress .stage-sm { grid-column: 2; grid-row: 1 / span 9; height: 340px; position: sticky; top: 24px; margin: 6px 0 0; }
+.stage-sm canvas { width: 100%; height: 100%; display: block; }
+.epochbar { height: 8px; border-radius: 4px; background: #f4e6ea; overflow: hidden; margin: -10px 0 22px; }
+.epochbar div {
+  height: 100%; width: 0; border-radius: 4px; transition: width .6s ease;
+  background: linear-gradient(90deg, #ffd08a, var(--ember), var(--ember-deep));
+  box-shadow: 0 0 12px rgba(240, 138, 75, .7);
+}
+.steps li.now.heat i { border-color: var(--ember); border-top-color: transparent; box-shadow: 0 0 10px rgba(240, 138, 75, .6); }
+.steps li.now.cold i { border-color: var(--frost-deep); border-top-color: transparent; }
+
+@media (max-width: 980px) {
+  .start { padding: 28px 20px 48px; }
+  .bench { grid-template-columns: 1fr; }
+  .protocol { position: static; }
+  .mode-card { height: 220px; }
+  .progress { grid-template-columns: 1fr; }
+  .progress .stage-sm { grid-column: 1; grid-row: auto; height: 160px; position: static; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mode-card, .mode-pick button, .epochbar div { transition: none; }
+  .slide-glass canvas { transition: none; }
+  .steps li.now i { animation: none; border-top-color: var(--hx); }
+}
+
+/* ================================================================
+   HEBI | Living Laboratory — complementary navy / amber / coral / sage
+   The two scientific modes share a layout, but have distinct energy.
+   ================================================================ */
+:root {
+  --paper:#f1f5f0; --panel:#fffef9; --panel-2:#f9fbf5;
+  --ink:#10263b; --ink-2:#46606c; --ink-3:#687d83;
+  --line:#d7e3dc; --hx:#ee763c; --hx-deep:#bd4727;
+  --hx-tint:#fff0df; --lilac:#ffc889; --eo:#ec83a3;
+  --eo-tint:#ffe2eb; --field:#0b2031; --field-ink:#f5faf3;
+  --field-ink-2:#b7cacc; --frost:#a6e3df; --frost-deep:#236b8a;
+  --ember:#ff953f; --ember-deep:#de4f42;
+  --r-s:8px; --r-m:15px;
+}
+html { scroll-behavior:smooth; }
+body { min-height:100vh; overflow-x:hidden; background:var(--paper); }
+header, main { position:relative; z-index:1; }
+.ambient-sky { position:fixed; inset:0; overflow:hidden; z-index:0; pointer-events:none; }
+.ambient-orbit { position:absolute; border:1px solid rgba(16,49,66,.075); border-radius:50%; transform-origin:center; }
+.orbit-one { width:76vw; height:76vw; right:-23vw; top:-37vw; animation:slowTurn 78s linear infinite; }
+.orbit-one::before,.orbit-one::after,.orbit-two::before {content:""; position:absolute; width:11px; height:11px; border-radius:50%; background:#ff8b56; box-shadow:0 0 24px #ff956c66; }
+.orbit-one::before {top:10%;left:15%;} .orbit-one::after {bottom:20%;right:6%;background:#77bda6;}
+.orbit-two {width:50vw;height:50vw;left:-29vw;bottom:-35vw;animation:slowTurn 110s linear reverse infinite;}
+.orbit-two::before{top:9%;right:16%;background:#ed94ac;}
+.ambient-bead {position:absolute; width:5px; height:5px; border-radius:50%; opacity:.35; background:#ed7342; animation:softFloat 12s ease-in-out infinite alternate;}
+.bead-one{top:27%;right:8%;} .bead-two{top:55%;left:5%;animation-delay:-4s;background:#59aa9b;}
+.bead-three{top:78%;right:21%;animation-delay:-8s;background:#f08fa6;}
+@keyframes slowTurn {to {transform:rotate(360deg)}}
+@keyframes softFloat {to {transform:translate(16px,-23px) scale(1.3);opacity:.65}}
+.bar { background:#0c2032; color:#e9f3ec; border-bottom:1px solid #203d4e; min-height:69px; padding:13px clamp(18px,3vw,54px); box-shadow:0 4px 30px #10263b0e; }
+.mark { gap:18px; align-items:center; }
+.mark b.brand-word { font-weight:700; font-size:26px; letter-spacing:.055em; color:#f6fbf5; display:inline-flex;align-items:baseline; }
+.mark>span { color:#b3cbc7; font-size:13px; letter-spacing:.03em; }
+.brand-i { position:relative; width:.34em; height:1.04em; display:inline-block; margin-left:.04em; vertical-align:baseline; }
+.brand-i-stem{ position:absolute; width:.16em; height:.53em; left:.10em; bottom:.03em; background:#fff7ec; border-radius:2px; }
+.brand-i-sigil{ position:absolute; left:.015em; top:.03em; width:.32em; height:.40em; display:block; background:#9de7e0; clip-path:polygon(47% 0,91% 69%,71% 95%,27% 95%,12% 68%); filter:drop-shadow(0 0 4px #98eef9); animation:iceShine 4s ease-in-out infinite; }
+body.train-active .brand-i-sigil { background:#ff9a45; clip-path:polygon(51% 0,76% 29%,74% 46%,100% 65%,80% 100%,27% 100%,4% 70%,30% 40%,30% 70%); animation:flamePulse .75s ease-in-out infinite alternate; filter:drop-shadow(0 0 7px #ff944dcc); }
+@keyframes iceShine{50%{opacity:.68;transform:translateY(1px)}}
+@keyframes flamePulse{to{transform:translateY(-2px) rotate(-4deg) scale(1.12);filter:drop-shadow(0 0 10px #ff824f)}}
+.bar .btn {background:#14334a;color:#f0f8f2;border-color:#375267;} .bar .btn:hover {background:#25465d;color:white;border-color:#ffb475;}
+.start { max-width:1580px; margin:auto; padding:58px clamp(18px,4vw,70px) 85px; }
+.hero-kicker { font-size:11px; font-weight:700; letter-spacing:.19em; color:#3d746f; display:flex;align-items:center; gap:11px; margin-bottom:23px; }
+.live-pulse{width:9px;height:9px; background:#ff8647; border-radius:50%; box-shadow:0 0 0 6px #ffb08726;animation:beacon 2.4s ease-in-out infinite;flex:none;}
+@keyframes beacon{50%{box-shadow:0 0 0 10px #ffb08712;transform:scale(.76)}}
+.kicker-line{width:31px;height:1px;background:#b3cdc1;}
+.start h1 { font-size:clamp(34px,4.2vw,60px); letter-spacing:-.04em; line-height:1.04; max-width:15em; font-weight:700; margin-bottom:18px; }
+
+.start .lede{font-size:clamp(16px,1.35vw,19px); max-width:67ch;color:#46606c;line-height:1.65;}
+.feature-pills{display:flex;gap:10px;flex-wrap:wrap;margin-top:25px;}
+.feature-pills span{border:1px solid #d6e5db;border-radius:30px;padding:8px 12px;font-weight:600;font-size:12px;background:#ffffffa9;color:#375869;}
+.feature-pills b{color:#d76437;font-size:11px;margin-right:7px;}
+.bench{grid-template-columns:minmax(310px,340px) minmax(0,1fr);gap:26px;margin-top:39px;}
+.protocol{background:#fffefa;border-radius:19px;border:1px solid #dce7dd;box-shadow:0 15px 55px #10263b09;padding:8px 21px 18px;}
+.protocol section{border-color:#e7ede6;} .protocol h2{font-size:13.5px;color:#1e4555;letter-spacing:.01em;}
+.section-index{display:inline-block;color:#e16e3e;margin-right:8px;font-size:11px;font-weight:800;}
+.mode-pick{background:#edf4ec;border-radius:12px;padding:5px;gap:5px;}
+.mode-pick button{border-radius:9px; padding:12px 8px;transition:background .25s,color .25s,transform .25s;}
+.mode-pick button:hover{transform:translateY(-1px);}
+.mode-pick button[data-mode="zero_shot"][aria-pressed="true"]{background:#d8f3ed;color:#165c6b;box-shadow:0 2px 12px #16485d10;}
+.mode-pick button[data-mode="continual"][aria-pressed="true"]{background:#ffdfc2;color:#994525;box-shadow:0 2px 12px #db6f3618;}
+.protocol #modeNote{background:#f3f8f1;border-radius:10px;padding:10px 12px; margin:3px 0 7px;color:#3f5962;line-height:1.52;}
+.protocol details.more>summary{color:#b84d29;}
+.field input,.field select{background:#fffefb;border-color:#d4e1d9;} .field>span{font-size:12px;font-weight:600;color:#567078;}
+.field input:focus,.field select:focus{border-color:#ec874b;}
+.btn{border-radius:9px;transition:transform .18s,box-shadow .2s,background .2s,border-color .2s;}
+.btn:not(:disabled):hover{transform:translateY(-1px);}
+.btn.primary{background:#f4773b;border-color:#f4773b;color:#102b3a; font-weight:800;box-shadow:0 8px 20px #e8783935;padding:11px 17px;}
+.btn.primary:hover{background:#ff9b53;border-color:#ff9b53;color:#102b3a;box-shadow:0 9px 24px #e8783950;}
+.btn.primary:disabled{background:#3a5566;border-color:#4b687a;color:#c9d8dc;box-shadow:none;opacity:1;}
+.demo-btn{background:#d9eee3;border-color:#c1ddcb;color:#1f624e;width:100%;display:flex;align-items:center;justify-content:center;gap:7px;padding:10px 12px;}
+.demo-btn span:last-child{margin-left:auto;}
+.demo-spark{color:#e66d45;font-size:18px;}
+.slide{min-height:292px;grid-template-columns:120px 1fr;background:linear-gradient(135deg,#0b2032,#14384b 72%,#1d4b50);border:1px solid #295466;box-shadow:0 15px 55px #102b3b24;border-radius:19px;}
+.slide-label{background:linear-gradient(155deg,#ff9d59,#fa7647 64%,#ef9e7c);border-right:0;position:relative;}
+.slide-label::after{content:"";position:absolute;bottom:24px;left:18px;width:62px;height:62px;border:1px solid #16364d38;border-radius:50%;box-shadow:14px -14px 0 -6px #16364d18;}
+.slide-label b{color:#142e3e;font-size:24px;} .slide-label span{color:#3a4350;font-size:12px;font-weight:600;}
+.drop-copy{padding:32px 10px 30px 33px;z-index:1;}
+.drop-copy strong{font-size:clamp(22px,2.3vw,32px);line-height:1.1;color:#f7f9ef;max-width:11em;letter-spacing:-.035em;margin-bottom:11px;}
+.drop-copy p{color:#afc9c8;margin-bottom:22px;font-size:14px;}
+.slide-glass canvas{height:292px; opacity:0; filter:drop-shadow(0 0 8px #ffba6444);}
+.slide.over{border-color:#ffa65d;box-shadow:0 0 0 4px #ff8c4c55,0 15px 55px #102b3b24;}
+.chosen{border:1px solid #d2e2d4;box-shadow:0 8px 24px #10263b0e;border-radius:15px;}
+.need{color:#597078;line-height:1.6;} .need code{background:#dfede6;color:#294d56;}
+.mode-card { height:300px;background:#ebf3f0;border-radius:18px;border-color:#cedfdb;box-shadow:0 12px 35px #1126360a;}
+.mode-card.hot{border-color:#f6b37d;} .mode-card.cold{border-color:#afd7d1;}
+.mode-overlay{position:absolute;bottom:19px;left:22px;pointer-events:none;right:20px;z-index:2;}
+.mode-overlay::before{content:"";position:absolute;inset:-48px -20px -19px;background:linear-gradient(0deg,#eaf2f0dd,transparent);z-index:-1;}
+.mode-eyebrow{font-size:13px;font-weight:700;color:#267188;}
+.mode-card.hot .mode-eyebrow{color:#c45a31;}
+.mode-state{position:static;font-weight:700;font-size:clamp(21px,2.3vw,31px);line-height:1.15;margin:6px 0 5px;letter-spacing:-.035em;}
+.mode-explainer{font-size:12.5px;color:#58757c;font-weight:500;}
+.progress{max-width:1420px;margin:auto;padding:54px clamp(18px,4vw,62px);grid-template-columns:minmax(0,1fr) minmax(315px,420px);gap:0 48px;}
+.progress h2{font-size:clamp(26px,3.2vw,42px);letter-spacing:-.035em;}
+.progress-showcase {grid-column:2;grid-row:1 / span 9;position:sticky;top:23px;min-width:0;}
+.progress .progress-showcase .stage-sm{height:195px;position:relative;margin:0 0 14px;grid-column:auto;grid-row:auto;border-color:#bacac7;border-radius:17px;overflow:hidden;}
+.stage-overlay{position:absolute;top:12px;left:15px;color:#2b6271;font-size:12.5px;font-weight:700;background:#e6f1edcc;padding:4px 8px;border-radius:5px;}
+.progress .steps li{border-bottom-color:#dce8de;color:#68808a;} .progress .steps li.done{color:#1c394c;}
+.progress .steps li.done i{background:#147d79;border-color:#147d79;}.progress .steps li.now i{border-color:#f08a4b;border-top-color:transparent;}
+.fact-deck {position:relative;overflow:hidden;border:1px solid #345363;border-radius:18px;min-height:303px;padding:19px 22px 20px;color:#f3f8f3;background:radial-gradient(circle at 95% -15%,#3d746e 0,transparent 48%),linear-gradient(135deg,#0e2e45,#0b2536);box-shadow:0 18px 34px #102c4022;display:flex;flex-direction:column;}
+.fact-deck::before{content:"";position:absolute;width:150px;height:150px;border:1px solid #a8e5cd26;border-radius:50%;right:-55px;top:13%;box-shadow:0 0 0 29px #9bdfbf08,0 0 0 57px #9bdfbf09;pointer-events:none;}
+.fact-top{font-size:12.5px;color:#c4e4d9;font-weight:600;display:flex;justify-content:space-between;gap:14px;position:relative;}
+.fact-stars{color:#ffb471;font-size:18px;line-height:.5;vertical-align:middle;margin-right:4px;}
+.fact-count{color:#93b9b7;font-variant-numeric:tabular-nums;}
+.fact-category{font-size:13px;color:#ffb782;font-weight:700;margin-top:20px;position:relative;}
+.fact-deck h3{color:#f7faf3;font-size:clamp(21px,2.3vw,30px);line-height:1.12;letter-spacing:-.035em;margin:7px 0 11px;max-width:17em;font-weight:700;position:relative;}
+.fact-deck p{color:#c6dcda;line-height:1.58;font-size:13.5px;max-width:43ch;position:relative;margin:0 0 22px;}
+.fact-footer{display:flex;justify-content:space-between;align-items:center;margin-top:auto;gap:12px;position:relative;}
+.fact-footer a{color:#ffc690;font-weight:700;font-size:12.5px;text-decoration:none;border-bottom:1px solid #ffc69080;padding-bottom:2px;}
+.fact-footer a:hover{color:#fff3dd;}
+.fact-nav{display:flex;gap:6px;}
+.fact-nav button{border:1px solid #5b7981;background:#214659;color:#e1f4e8;border-radius:8px;min-width:32px;min-height:32px;font-size:18px;transition:background .2s,transform .2s;cursor:pointer;}
+.fact-nav button:hover{background:#3e7177;transform:translateY(-1px);}
+.fact-timeline{position:absolute;bottom:0;left:0;right:0;height:3px;background:#294b5c;overflow:hidden;}
+.fact-timeline>span{display:block;width:0;height:100%;background:linear-gradient(90deg,#5abfae,#ffc180);}
+@keyframes factFill{to{width:100%}}
+@keyframes factSlide{from{opacity:.3;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
+.fact-reveal h3,.fact-reveal p,.fact-reveal .fact-category{animation:factSlide .48s ease-out both;}
+.fact-reveal p{animation-delay:.07s;}
+.app{padding:24px clamp(15px,2.6vw,45px) 48px;max-width:1900px;margin:auto;}
+.facts{margin-bottom:20px;gap:9px 20px;}
+.facts>span{padding:6px 12px;border:1px solid #d5e3d9;background:#ffffff99;border-radius:25px;color:#466775;}
+.facts>span.demo-tag{background:#ffe0c3;color:#a84b2e;border-color:#ffd1a4;}
+.controls{border:1px solid #d4e4d9;border-radius:14px;background:#fffefa;padding:12px 14px;box-shadow:0 6px 20px #102b3b08;}
+.seg{border-color:#cbded1;background:#f4f8f1;border-radius:9px;}
+.seg button{padding:9px 12px;} .seg button[aria-pressed="true"]{background:#123950;color:#f7faf0;}
+.genebox input{background:#fffefa;border-color:#cbded1;}
+.kctl input[type=range]{accent-color:#ed7943;}
+.grid{grid-template-columns:minmax(0,1.18fr) minmax(0,1fr) 310px;gap:14px;}
+.view{background:#0b2031;box-shadow:0 13px 34px #102c3b16;border:1px solid #25465a;border-radius:15px;}
+.view-head{background:linear-gradient(180deg,#0b2031ec,#0b203100);padding:13px 12px;}
+.tool{background:#193c51e8;border-color:#3c6474;color:#edf7ef;}
+.tool[aria-pressed="true"]{background:#ea7651;border-color:#ea7651;color:#10263b;}
+.card{background:#fffef9;border:1px solid #d6e4db;box-shadow:0 7px 23px #10263b08;border-radius:14px;padding:16px;}
+.card h4{color:#173a4b;} .clusters button:hover{background:#eef6ef;}.clusters button[aria-pressed="true"]{background:#def2e4;}
+.clusters .tag{color:#587882;} .linkbtn{color:#b04f30;}
+.markers-wrap{border-top:1px solid #edf0e9;}
+.slides .mix{height:14px;}
+@media(max-width:1180px){.grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)} }
+@media(max-width:980px){.bench{grid-template-columns:1fr;}.progress{grid-template-columns:1fr;}.progress-showcase{grid-column:1;grid-row:auto;position:static;margin:20px 0;}.progress .progress-showcase .stage-sm{height:175px;}.start{padding-top:35px;}}
+@media(max-width:760px){.start{padding:35px 15px 50px;}.start h1{font-size:clamp(36px,9.2vw,57px)}.slide{grid-template-columns:1fr;}.slide-label{padding:10px 17px;flex-direction:row;align-items:baseline;}.slide-label::after{display:none;}.drop-copy{padding:25px 19px 8px;}.drop-copy strong{max-width:100%;}.slide-glass canvas{height:170px}.hero-kicker{font-size:9px;letter-spacing:.11em;}.feature-pills{gap:6px;}.feature-pills span{font-size:11px;}.fact-deck{min-height:280px;}.mark>span{font-size:11px;}.bar{padding:13px 15px;}.grid{grid-template-columns:1fr;}.progress{padding:27px 16px;}}
+.colab-btn{background:#f4773b;border-color:#f4773b;color:#102b3a;text-decoration:none;}
+.colab-btn:hover{background:#ff9b53;border-color:#ff9b53;color:#102b3a;}
+.preview-btn{width:100%;display:flex;gap:10px;justify-content:space-between;align-items:center;background:transparent;color:#356575;border:1px dashed #b4cfc3;padding:10px 13px;font-size:13px;}
+.preview-btn:hover{background:#e5f2ec;color:#173c51;border-color:#8ebea5;}
+@media(prefers-reduced-motion:reduce){.ambient-orbit,.ambient-bead,.brand-i-sigil,.live-pulse,.fact-reveal h3,.fact-reveal p,.fact-reveal .fact-category{animation:none!important;}html{scroll-behavior:auto}.btn,.mode-pick button,.fact-nav button{transition:none!important;}}
+
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="mark"><b aria-label="HEBI" class="brand-word">HEB<span class="brand-i" aria-hidden="true"><span class="brand-i-stem"></span><span class="brand-i-sigil"></span></span></b><span id="barTitle">the living tissue explorer</span></div>
+  <div class="menu" id="dlMenu" hidden>
+    <button class="btn" id="dlBtn" aria-haspopup="true" aria-expanded="false">Download</button>
+    <div class="menu-list" id="dlList" hidden></div>
+  </div>
+  <button class="btn" id="newBtn" hidden>Start a new run</button>
+</header>
+
+<!-- ================= start ================= -->
+<main class="start" id="startView">
+  <div class="notice err" id="serverNote" hidden></div>
+  <h1>Upload a section and see how HEBI reads it</h1>
+  <p class="lede">Spatial transcriptomics without the notebook. Upload your sections, explore cell neighbourhoods and learned niches, and move between the tissue and its embedding in one workspace.</p>
+
+  <div class="bench">
+    <aside class="protocol" aria-label="Run settings">
+      <section>
+        <h2>Model</h2>
+      <div class="mode-pick" role="group" aria-label="Model">
+        <button data-mode="zero_shot" aria-pressed="true">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"><path d="M8 1.5v13M2.4 4.75l11.2 6.5M2.4 11.25l11.2-6.5"/><path d="M6.4 2.6 8 4.2l1.6-1.6M6.4 13.4 8 11.8l1.6 1.6"/></g></svg>
+          Zero-shot</button>
+        <button data-mode="continual" aria-pressed="false">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8.2 1.2c.4 2.3 3.8 3.9 3.8 7.6A4 4 0 0 1 4 9c0-1.6.8-2.7 1.7-3.5.1 1.2.7 2 1.5 2.3-.4-2.2.2-4.6 1-6.6z" fill="currentColor"/></svg>
+          Train first</button>
+      </div>
+        <p class="need" id="modeNote">Zero-shot runs the encoder once and groups cells by their encoding. It is fast.</p>
+        <div class="opts">
+    <label class="field mode-hidden"><span>Model</span>
+      <select id="optMode">
+        <option value="zero_shot">No training (zero-shot)</option>
+        <option value="continual">Train on my slides first</option>
+      </select></label>
+    <label class="field wide"><span>Starting weights</span>
+      <select id="optInit">
+        <option value="pretrained" selected>Pretrained HEBI</option>
+         <option value="random">Random (untrained)</option>
+      </select></label>
+    <label class="field trainopts wide" hidden><span>Niche objective</span>
+      <select id="optNiche">
+        <option value="original">Original</option>
+        <option value="spatial">Spatially regularised (experimental)</option>
+      </select></label>
+    <label class="field trainopts" hidden><span>Training epochs</span>
+      <input type="number" id="optEpochs" min="1" max="1000" value="10"></label>
+    <label class="field trainopts" hidden><span>Learning rate</span>
+      <select id="optLr"><option value="0.0001">1e-4</option><option value="0.001">1e-3</option><option value="0.00001">1e-5</option></select></label>
+        </div>
+      </section>
+      <section>
+        <h2>Your data</h2>
+        <div class="opts">
+    <label class="field"><span>Species</span>
+      <select id="optSpecies"><option>Human</option><option>Mouse</option></select></label>
+    <label class="field"><span>Cell groups</span>
+      <input type="number" id="optClusters" min="2" max="24" value="8"></label>
+        </div>
+      </section>
+      <section>
+  <details class="more">
+    <summary>More settings</summary>
+    <div class="opts">
+      <label class="field"><span>Spatial neighbours per cell</span>
+        <input type="number" id="optK" min="3" max="100" value="30"></label>
+      <label class="field"><span>Communities per section (METIS)</span>
+        <input type="number" id="optMetis" min="8" max="8192" value="1024">
+        <small>Default 1024. Fewer communities suit spot-based data with fewer, larger units. Sections with fewer cells than this use one community per 10 cells.</small></label>
+      <label class="field"><span>Random seed</span>
+        <input type="number" id="optSeed" min="0" value="0"></label>
+      <label class="field"><span>Genes</span>
+        <select id="optHvg"><option value="0">All genes in the file</option><option value="2000">Top 2,000 highly variable</option>
+          <option value="3000">Top 3,000 highly variable</option><option value="5000">Top 5,000 highly variable</option></select>
+        <small>For whole-transcriptome data. Targeted panels usually keep all genes.</small></label>
+      <label class="field"><span>Library-size normalisation</span>
+        <select id="optNorm"><option value="false">Off: log1p only</option><option value="true">On: normalise, then log1p</option></select>
+        <small>Raw counts are normalised directly. Log-transformed files use a raw-count layer if they have one, otherwise log1p is reversed first. HEBI was pretrained without this step.</small></label>
+    </div>
+  </details>
+      </section>
+      <section>
+  <div class="demo-row">
+    <button class="btn demo-btn" id="exampleBtn" hidden>Explore the breast cancer example</button>
+    <a class="btn demo-btn colab-btn" id="colabBtn" target="_blank" rel="noopener" hidden>Run HEBI on your own data (free GPU in Colab)</a>
+    <button class="btn demo-btn" id="demoBtn">Explore the synthetic demo</button>
+    <button class="btn preview-btn" id="previewBtn" type="button">Preview the waiting screen</button>
+    <p>No file at hand? The demo is two synthetic slides generated in your browser. It shows how the
+      page works; it is not real data and not HEBI output.</p>
+  </div>
+      </section>
+    </aside>
+
+    <div class="stagecol">
+  <div class="slide" id="slide">
+    <div class="slide-label">
+      <b>HEBI</b><div class="rule"></div><span>zero-shot</span><span>one slide or several</span>
+    </div>
+    <div class="slide-glass">
+      <div class="drop-copy">
+        <strong>Drop one or more sections here</strong>
+        <p id="dropSub">each .h5ad file is one slide</p>
+        <button class="btn primary" id="pickBtn">Choose files</button>
+        <input type="file" id="fileInput" accept=".h5ad" multiple hidden>
+      </div>
+      <canvas id="heroCanvas" aria-hidden="true"></canvas>
+    </div>
+  </div>
+  <div class="chosen" id="chosen" hidden>
+    <ul id="chosenList"></ul>
+    <div class="foot">
+      <button class="btn primary" id="runBtn">Run HEBI</button>
+      <p id="chosenNote"></p>
+    </div>
+  </div>
+  <p class="need">Each file needs cell positions in <code>obsm['spatial']</code> and gene symbols as variable names.
+    Counts or log-transformed values both work.</p>
+      <section class="mode-card cold" id="modeCard" aria-label="Model state">
+        <canvas id="modeCanvas" aria-hidden="true"></canvas>
+        <div class="mode-overlay"><span class="mode-eyebrow" id="modeEyebrow">Zero-shot</span><p class="mode-state" id="modeState">Weights frozen</p><span class="mode-explainer" id="modeExplainer">One pass of the pretrained encoder over every cell.</span></div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<!-- ================= progress ================= -->
+<main class="progress" id="progressView" hidden>
+  <h2 id="progTitle">Working on your section</h2>
+  <p class="sub" id="progSub"></p>
+  <div class="progress-showcase">
+    <div class="stage-sm"><canvas id="progCanvas" aria-hidden="true"></canvas><span class="stage-overlay" id="stageOverlay">HEBI is running</span></div>
+    <section class="fact-deck" id="factDeck" aria-live="off" aria-label="Scientific discoveries to read while processing">
+      <div class="fact-top"><span>Something to read while you wait</span><span class="fact-count" id="factCount">1 of 30</span></div>
+      <div class="fact-category" id="factCategory">Discovery</div>
+      <h3 id="factHeadline">A discovery worth reading</h3>
+      <p id="factDescription">Some of the best scientific ideas began with a question nobody thought to ask.</p>
+      <div class="fact-footer"><a id="factSource" href="#" target="_blank" rel="noopener noreferrer">Read the source</a><div class="fact-nav"><button id="factPrev" type="button" aria-label="Previous discovery">←</button><button id="factNext" type="button" aria-label="Next discovery">→</button></div></div>
+    </section>
+  </div>
+  <div class="uploadbar" id="uploadBar"><div></div></div>
+  <div class="runmeter" id="runMeter" hidden>
+    <div class="runmeter-text"><span id="runStep"></span><span id="runLeft" class="num"></span></div>
+    <div class="runmeter-bar"><div id="runFill"></div></div>
+  </div>
+  <div class="epochbar" id="epochBar" hidden><div></div></div>
+  <ol class="steps" id="steps"></ol>
+  <div class="notice err" id="progError" hidden></div>
+  <button class="btn" id="progBack" hidden>Back to the files</button>
+  <details class="log"><summary>Run log</summary><pre id="progLog"></pre></details>
+</main>
+
+<!-- ================= explorer ================= -->
+<main class="app" id="appView" hidden>
+  <div id="warnings"></div>
+  <div class="facts" id="facts"></div>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Colour cells by">
+      <button id="modeCluster" aria-pressed="true">Colour by cluster</button>
+      <button id="modeGene" aria-pressed="false">Colour by gene</button>
+      <button id="modeSlide" aria-pressed="false" hidden>Colour by slide</button>
+    </div>
+    <div class="genebox">
+      <input id="geneInput" type="text" placeholder="Search a gene" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="false" aria-controls="geneSuggest" aria-label="Gene">
+      <ul class="suggest" id="geneSuggest" role="listbox" hidden></ul>
+    </div>
+    <div class="seg" role="group" aria-label="Group cells by" id="groupSeg" hidden>
+      <button id="groupClusters" aria-pressed="true">Cell clusters</button>
+      <button id="groupNiches" aria-pressed="false">Niches</button>
+    </div>
+    <label class="kctl nk" id="nicheKctl" hidden><span>Niches</span>
+      <select id="nicheK" aria-label="Number of niches"></select></label>
+    <label class="kctl nk" id="tinyCtl" hidden><span>Merging</span>
+      <select id="tinyPolicy" aria-label="How prototypes are merged into niches">
+        <option value="keep">Original</option>
+        <option value="absorb_prototype">Original, absorb small</option>
+        <option value="size_space">Size and space aware</option>
+      </select></label>
+    <div class="kctl" id="kctl">
+      <label for="kRange">Number of clusters</label>
+      <input type="range" id="kRange" min="2" max="24" value="8">
+      <output id="kOut" for="kRange">8</output>
+    </div>
+  </div>
+
+  <div class="grid" id="viewGrid">
+    <section class="view" id="tissueView" aria-label="Tissue map">
+      <div class="view-head">
+        <h3>Tissue</h3>
+        <button class="tool" data-act="lasso" aria-pressed="false">Lasso</button>
+        <button class="tool" data-act="flip">Flip vertically</button>
+        <button class="tool" data-act="reset">Reset view</button>
+      </div>
+      <div class="scale" id="geneScale" hidden>
+        <b id="geneScaleName"></b>
+        <div class="ramp" id="geneRamp"></div>
+        <div class="ends"><span>0</span><span id="geneScaleMax"></span></div>
+      </div>
+    </section>
+    <section class="view" id="embView" aria-label="Cell embedding">
+      <div class="view-head">
+        <h3><span id="embName">Embedding</span><small id="embNote"></small></h3>
+        <button class="tool" data-act="lasso" aria-pressed="false">Lasso</button>
+        <button class="tool" data-act="reset">Reset view</button>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="card">
+        <h4>Clusters<small id="clusterNote"></small></h4>
+        <ul class="clusters" id="clusterList"></ul>
+      </div>
+      <div class="card" id="slideCard" hidden>
+        <h4>Slides<small>share of each group</small></h4>
+        <ul class="slides" id="slideList"></ul>
+      </div>
+      <div class="card" id="selCard" hidden>
+        <h4 id="selTitle">Selection</h4>
+        <div class="selbar" id="selBar"></div>
+        <ul class="sel-list" id="selList"></ul>
+        <button class="linkbtn" id="selClear">Clear selection</button>
+      </div>
+      <div class="card">
+        <h4 id="markerTitle">Marker genes</h4>
+        <p class="plain" id="markerHint">Choose a group in the list, or click a cell, to see the genes that set it apart.</p>
+        <div class="markers-wrap" id="markerWrap" hidden>
+          <table class="markers">
+            <thead><tr><th>Gene</th><th>Score</th><th>In cluster</th><th>Elsewhere</th></tr></thead>
+            <tbody id="markerBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </aside>
+    <p class="hint">Scroll to zoom and drag to move. Hold Shift and drag, or use Lasso, to select cells; the same cells light up in the other panel.</p>
+  </div>
+
+  <div class="below">
+    <div class="card">
+      <h4>Top marker genes across clusters</h4>
+      <div class="dot-scroll" id="dotplot"></div>
+      <div class="dot-legend">
+        <span>Dot size: share of cells expressing
+          <svg width="74" height="20" aria-hidden="true"><circle cx="8" cy="10" r="3.4" fill="#9a8fb4"/><circle cx="30" cy="10" r="6" fill="#9a8fb4"/><circle cx="58" cy="10" r="9" fill="#9a8fb4"/></svg>
+          20%, 60%, 100%</span>
+        <span>Colour: mean expression, low<span class="ramp" id="dotRamp"></span>high (scaled per gene)</span>
+      </div>
+    </div>
+    <div class="card">
+      <h4>Run details</h4>
+      <dl class="run" id="runDetails"></dl>
+    </div>
+  </div>
+</main>
+
+<div class="tip" id="tip" hidden></div>
+
+<script>
+"use strict";
+/* ============================================================
+   Small helpers
+   ============================================================ */
+const $ = (s, r = document) => r.querySelector(s);
+const el = (tag, props = {}, kids = []) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "style") e.style.cssText = v; else if (k === "text") e.textContent = v;
+    else if (k in e) e[k] = v; else e.setAttribute(k, v);
+  }
+  for (const c of [].concat(kids)) e.append(c);
+  return e;
+};
+const fmt = n => Number(n).toLocaleString("en-US");
+const pct = (x, d = 0) => (100 * x).toFixed(d) + "%";
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const mixRgb = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+const rgbCss = c => `rgb(${c[0]},${c[1]},${c[2]})`;
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function ramp(stops) {           // [[t, hex], ...] -> 256 rgb entries
+  const s = stops.map(([t, h]) => [t, hexRgb(h)]), out = [];
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255; let j = 0;
+    while (j < s.length - 2 && t > s[j + 1][0]) j++;
+    const u = clamp((t - s[j][0]) / (s[j + 1][0] - s[j][0]), 0, 1);
+    out.push(mixRgb(s[j][1], s[j + 1][1], u));
+  }
+  return out;
+}
+const rampCss = stops => `linear-gradient(90deg, ${stops.map(([t, h]) => `${h} ${t * 100}%`).join(", ")})`;
+
+/* Colours. Clusters: eight hues checked for colour-vision separation on the dark
+   viewport, then a lighter and a darker tier of the same hues for 9-24 clusters. */
+const BASE = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#0ca30c", "#9085e9", "#e66767"].map(hexRgb);
+const PALETTE = [...BASE, ...BASE.map(c => mixRgb(c, [255, 255, 255], .48)), ...BASE.map(c => mixRgb(c, [0, 0, 0], .36))];
+const GENE_STOPS = [[0, "#3a2f55"], [.4, "#7b5fc2"], [.75, "#c6b3f2"], [1, "#fbf8ff"]];   // one hue on the dark field
+const GENE_LUT = ramp(GENE_STOPS);
+const GENE_ZERO = [58, 48, 82];
+const DOT_STOPS = [[0, "#ebe4f7"], [.5, "#8a6fc4"], [1, "#3b2867"]];                      // one hue on the light card
+const DOT_LUT = ramp(DOT_STOPS);
+
+/* ============================================================
+   WebGL scatter: pan, zoom, hover, lasso
+   ============================================================ */
+const VS = `attribute vec2 a_pos; attribute vec4 a_col;
+uniform vec2 u_scale, u_center; uniform float u_size, u_pass; varying vec4 v_col;
+void main() {
+  gl_Position = vec4((a_pos - u_center) * u_scale, 0.0, 1.0);
+  if ((a_col.a < 0.5) != (u_pass < 0.5)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  gl_PointSize = u_size; v_col = a_col;
+}`;
+const FS = `precision mediump float; varying vec4 v_col;
+void main() {
+  vec2 c = gl_PointCoord - 0.5; float d = dot(c, c);
+  if (d > 0.25) discard;
+  float a = v_col.a * smoothstep(0.25, 0.17, d);
+  gl_FragColor = vec4(v_col.rgb * a, a);
+}`;
+
+class Scatter {
+  constructor(root, handlers) {
+    this.root = root; this.h = handlers; this.n = 0; this.tool = "pan";
+    this.view = { cx: 0, cy: 0, zoom: 1 }; this.marker = -1; this.hover = -1; this.labels = [];
+    this.glc = el("canvas"); this.ov = el("canvas", { className: "ov" });
+    root.append(this.glc, this.ov);
+    const gl = this.gl = this.glc.getContext("webgl", { antialias: false, alpha: false });
+    if (!gl) { root.append(el("div", { className: "view-msg", text: "This browser cannot draw the map (WebGL is off)." })); return; }
+    const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    const p = this.prog = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
+    gl.useProgram(p);
+    this.loc = { pos: gl.getAttribLocation(p, "a_pos"), col: gl.getAttribLocation(p, "a_col"),
+      scale: gl.getUniformLocation(p, "u_scale"), center: gl.getUniformLocation(p, "u_center"),
+      size: gl.getUniformLocation(p, "u_size"), pass: gl.getUniformLocation(p, "u_pass") };
+    this.posBuf = gl.createBuffer(); this.colBuf = gl.createBuffer();
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    const f = hexRgb("#0b2031"); gl.clearColor(f[0] / 255, f[1] / 255, f[2] / 255, 1);
+    new ResizeObserver(() => this.resize()).observe(root);
+    this.bind(); this.resize();
+  }
+  resize() {
+    const r = this.root.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.W = Math.max(1, r.width); this.H = Math.max(1, r.height); this.dpr = dpr;
+    for (const c of [this.glc, this.ov]) { c.width = Math.round(this.W * dpr); c.height = Math.round(this.H * dpr); }
+    if (this.gl) this.gl.viewport(0, 0, this.glc.width, this.glc.height);
+    if (this.n && !this.fitted) this.fit();
+    this.draw();
+  }
+  setData(xy, flipY = false) {
+    const n = this.n = xy.length / 2;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (let i = 0; i < n; i++) { const x = xy[2 * i], y = xy[2 * i + 1];
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    const half = Math.max(x1 - x0, y1 - y0) / 2 || 1, mx = (x0 + x1) / 2, my = (y0 + y1) / 2, s = flipY ? -1 : 1;
+    const w = this.world = new Float32Array(2 * n);
+    for (let i = 0; i < n; i++) { w[2 * i] = (xy[2 * i] - mx) / half; w[2 * i + 1] = s * (xy[2 * i + 1] - my) / half; }
+    this.ex = (x1 - x0) / 2 / half || 1; this.ey = (y1 - y0) / 2 / half || 1; this.norm = { mx, my, half, s };
+    const gl = this.gl; if (!gl) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf); gl.bufferData(gl.ARRAY_BUFFER, w, gl.STATIC_DRAW);
+    // uniform grid for hover lookups
+    const G = this.G = clamp(Math.ceil(Math.sqrt(n / 6)), 8, 512), start = new Uint32Array(G * G + 1), cell = new Uint32Array(n);
+    for (let i = 0; i < n; i++) { const c = this.cellOf(w[2 * i], w[2 * i + 1]); cell[i] = c; start[c + 1]++; }
+    for (let c = 0; c < G * G; c++) start[c + 1] += start[c];
+    const fill = start.slice(0, G * G), items = new Uint32Array(n);
+    for (let i = 0; i < n; i++) items[fill[cell[i]]++] = i;
+    this.gridStart = start; this.gridItems = items;
+    this.marker = this.hover = -1; this.fit();
+  }
+  cellOf(x, y) { const G = this.G; return clamp(Math.floor((y + 1) / 2 * G), 0, G - 1) * G + clamp(Math.floor((x + 1) / 2 * G), 0, G - 1); }
+  setColors(rgba) {
+    const gl = this.gl; if (!gl) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.colBuf); gl.bufferData(gl.ARRAY_BUFFER, rgba, gl.DYNAMIC_DRAW); this.draw();
+  }
+  get unit() { return .46 * Math.min(this.W, this.H); }               // px per world unit at zoom 1
+  get px() { return this.view.zoom * this.unit; }
+  fit() {
+    this.fitted = this.W > 2 && this.H > 2;
+    const head = this.labels.length ? 56 : 34;                           // keep clear of the panel header
+    this.zoom0 = .94 * Math.min(this.W / (2 * this.ex), (this.H - head) / (2 * this.ey)) / this.unit;
+    this.view = { cx: 0, cy: (head / 2) / (this.zoom0 * this.unit), zoom: this.zoom0 }; this.draw();
+  }
+  toScreen(wx, wy) { return [this.W / 2 + (wx - this.view.cx) * this.px, this.H / 2 - (wy - this.view.cy) * this.px]; }
+  toWorld(sx, sy) { return [this.view.cx + (sx - this.W / 2) / this.px, this.view.cy - (sy - this.H / 2) / this.px]; }
+  get pointSize() { return clamp(.9 * this.px * Math.sqrt(4 * this.ex * this.ey / Math.max(this.n, 1)), 1.3, 14); }
+  draw() {
+    const gl = this.gl; if (!gl) return;
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (this.n) {
+      gl.useProgram(this.prog);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf); gl.enableVertexAttribArray(this.loc.pos);
+      gl.vertexAttribPointer(this.loc.pos, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.colBuf); gl.enableVertexAttribArray(this.loc.col);
+      gl.vertexAttribPointer(this.loc.col, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+      gl.uniform2f(this.loc.scale, 2 * this.px / this.W, 2 * this.px / this.H);
+      gl.uniform2f(this.loc.center, this.view.cx, this.view.cy);
+      gl.uniform1f(this.loc.size, this.pointSize * this.dpr);
+      gl.uniform1f(this.loc.pass, 0); gl.drawArrays(gl.POINTS, 0, this.n);     // dimmed cells first
+      gl.uniform1f(this.loc.pass, 1); gl.drawArrays(gl.POINTS, 0, this.n);     // active cells on top
+    }
+    this.drawOverlay();
+  }
+  drawOverlay() {
+    const c = this.ov.getContext("2d"); c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); c.clearRect(0, 0, this.W, this.H);
+    const ring = (i, col) => { if (i < 0 || i >= this.n) return;
+      const [x, y] = this.toScreen(this.world[2 * i], this.world[2 * i + 1]);
+      c.beginPath(); c.arc(x, y, Math.max(this.pointSize / 2 + 3, 6), 0, 6.2832); c.lineWidth = 2; c.strokeStyle = col; c.stroke(); };
+    ring(this.marker, "#ffffff"); ring(this.hover, "#ffffff");
+    if (this.labels.length && this.norm) {                              // slide names above each slide
+      const { mx, my, half, s } = this.norm; c.font = "600 12px " + getComputedStyle(document.body).fontFamily;
+      c.fillStyle = "#d3cbe4"; c.textBaseline = "bottom";
+      for (const L of this.labels) {
+        const [x, y] = this.toScreen((L.x - mx) / half, s * (L.y - my) / half), room = L.w / half * this.px;
+        let t = L.text; while (t.length > 3 && c.measureText(t).width > room) t = t.slice(0, -2);
+        c.fillText(t === L.text ? t : t + "…", x, y - 5);
+      }
+    }
+    const d = this.drag;
+    if (d && d.lasso && d.pts.length > 1) {
+      c.beginPath(); d.pts.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y)); c.closePath();
+      c.fillStyle = "rgba(185,98,154,.18)"; c.fill(); c.lineWidth = 1.5; c.strokeStyle = "#e8a6d2"; c.setLineDash([5, 4]); c.stroke(); c.setLineDash([]);
+    }
+  }
+  pick(sx, sy) {
+    if (!this.n) return -1;
+    const [wx, wy] = this.toWorld(sx, sy), r = Math.max(this.pointSize / 2 + 2, 6) / this.px, G = this.G;
+    const cx0 = clamp(Math.floor((wx - r + 1) / 2 * G), 0, G - 1), cx1 = clamp(Math.floor((wx + r + 1) / 2 * G), 0, G - 1);
+    const cy0 = clamp(Math.floor((wy - r + 1) / 2 * G), 0, G - 1), cy1 = clamp(Math.floor((wy + r + 1) / 2 * G), 0, G - 1);
+    let best = -1, bd = r * r;
+    for (let gy = cy0; gy <= cy1; gy++) for (let gx = cx0; gx <= cx1; gx++) {
+      const c = gy * G + gx;
+      for (let k = this.gridStart[c]; k < this.gridStart[c + 1]; k++) {
+        const i = this.gridItems[k], dx = this.world[2 * i] - wx, dy = this.world[2 * i + 1] - wy, d = dx * dx + dy * dy;
+        if (d < bd && (!this.pickable || this.pickable(i))) { bd = d; best = i; }
+      }
+    }
+    return best;
+  }
+  lassoHits(pts) {
+    const poly = pts.map(([x, y]) => this.toWorld(x, y)), m = poly.length, w = this.world, hits = [];
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of poly) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    for (let i = 0; i < this.n; i++) {
+      const x = w[2 * i], y = w[2 * i + 1];
+      if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+      let inside = false;
+      for (let a = 0, b = m - 1; a < m; b = a++) {
+        const [xa, ya] = poly[a], [xb, yb] = poly[b];
+        if ((ya > y) !== (yb > y) && x < (xb - xa) * (y - ya) / (yb - ya) + xa) inside = !inside;
+      }
+      if (inside) hits.push(i);
+    }
+    return hits;
+  }
+  setTool(t) { this.tool = t; this.ov.classList.toggle("lasso", t === "lasso"); }
+  setMarker(i) { if (i !== this.marker) { this.marker = i; this.drawOverlay(); } }
+  bind() {
+    const ov = this.ov, at = e => { const r = ov.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    ov.addEventListener("pointerdown", e => {
+      if (e.button !== 0) return; ov.setPointerCapture(e.pointerId);
+      const [x, y] = at(e);
+      this.drag = { x, y, moved: false, lasso: this.tool === "lasso" || e.shiftKey, pts: [[x, y]], cx: this.view.cx, cy: this.view.cy };
+      this.hover = -1; this.h.hover(-1);
+    });
+    ov.addEventListener("pointermove", e => {
+      const [x, y] = at(e), d = this.drag;
+      if (!d) { const i = this.pick(x, y); if (i !== this.hover) { this.hover = i; this.drawOverlay(); } this.h.hover(i, e.clientX, e.clientY); return; }
+      if (Math.abs(x - d.x) + Math.abs(y - d.y) > 4) d.moved = true;
+      if (d.lasso) { d.pts.push([x, y]); this.drawOverlay(); }
+      else if (d.moved) { this.view.cx = d.cx - (x - d.x) / this.px; this.view.cy = d.cy + (y - d.y) / this.px; this.draw(); }
+    });
+    const end = e => {
+      const d = this.drag; if (!d) return; this.drag = null;
+      if (!d.moved) this.h.click(this.pick(d.x, d.y));
+      else if (d.lasso && d.pts.length > 2) this.h.lasso(this.lassoHits(d.pts));
+      this.drawOverlay();
+    };
+    ov.addEventListener("pointerup", end); ov.addEventListener("pointercancel", () => { this.drag = null; this.drawOverlay(); });
+    ov.addEventListener("pointerleave", () => { if (!this.drag) { this.hover = -1; this.drawOverlay(); this.h.hover(-1); } });
+    ov.addEventListener("wheel", e => {
+      e.preventDefault(); if (!this.n) return;
+      const [x, y] = at(e), [wx, wy] = this.toWorld(x, y);
+      this.view.zoom = clamp(this.view.zoom * Math.exp(-e.deltaY * .0016), this.zoom0 * .4, this.zoom0 * 300);
+      this.view.cx = wx - (x - this.W / 2) / this.px; this.view.cy = wy + (y - this.H / 2) / this.px;
+      this.draw();
+    }, { passive: false });
+    ov.addEventListener("dblclick", () => this.fit());
+  }
+}
+
+/* ============================================================
+   Data sources: the HEBI server, or a synthetic demo
+   ============================================================ */
+async function getJSON(url) {
+  const r = await fetch(url); const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || j.detail || `Request failed (${r.status})`);
+  return j;
+}
+async function getBuf(url) {
+  const r = await fetch(url);
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || `Request failed (${r.status})`); }
+  return r.arrayBuffer();
+}
+class ApiSource {
+  constructor(id) { this.base = `/api/jobs/${id}`; }
+  meta() { return getJSON(`${this.base}/meta`); }
+  async coords() { return new Float32Array(await getBuf(`${this.base}/coords`)); }
+  async sections() { return new Uint8Array(await getBuf(`${this.base}/sections`)); }
+  async embedding() {
+    const [i, xy] = await Promise.all([getBuf(`${this.base}/embedding/index`), getBuf(`${this.base}/embedding/xy`)]);
+    return { idx: new Uint32Array(i), xy: new Float32Array(xy) };
+  }
+  async clusters(k) {
+    const info = await getJSON(`${this.base}/clusters?k=${k}`);
+    return { info, labels: new Uint8Array(await getBuf(`${this.base}/labels?k=${k}`)) };
+  }
+  async niches(k = 0, policy = "keep") {
+    const q = `k=${k}&policy=${policy}`;
+    const info = await getJSON(`${this.base}/niches?${q}`);
+    return { info, labels: new Uint8Array(await getBuf(`${this.base}/niche_labels?${q}`)) };
+  }
+  async gene(name) { return new Float32Array(await getBuf(`${this.base}/gene?name=${encodeURIComponent(name)}`)); }
+  downloads(k) {
+    return [
+      { label: "Results as .h5ad", note: S.sections.length > 1 ? "all slides in one file, with a slide column, the cell embedding (z0) and cluster labels"
+        : "expression, cell embedding (z0) and cluster labels", href: `${this.base}/download.h5ad?k=${k}` },
+      { label: "Cluster labels as .csv", note: `one row per cell, ${k} clusters` + (S.meta.has_niches ? " and the niche" : ""), href: `${this.base}/download.csv?k=${k}` },
+    ];
+  }
+}
+
+/* ---- synthetic tissue, used by the demo and by the picture on the start screen ---- */
+function makeTissue(n, seed, tumour = true) {
+  const rnd = mulberry32(seed), gauss = () => Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(6.2832 * rnd());
+  const outline = a => 1 + .1 * Math.sin(2 * a + .6) + .07 * Math.sin(3 * a + 2.1) + .04 * Math.sin(5 * a);
+  const glands = [], foci = [];
+  while (glands.length < 18) { const x = -1 + 1.2 * rnd(), y = -.85 + 1.7 * rnd(), r = .06 + .05 * rnd();
+    if (Math.hypot(x, y) < .8 && glands.every(g => Math.hypot(g[0] - x, g[1] - y) > g[2] + r + .02)) glands.push([x, y, r]); }
+  while (foci.length < 5) { const a = 6.2832 * rnd(), d = .2 + .55 * rnd(); foci.push([d * Math.cos(a), d * Math.sin(a), .05 + .04 * rnd()]); }
+  const xy = new Float32Array(2 * n), type = new Uint8Array(n), region = new Uint8Array(n);
+  for (let i = 0; i < n;) {
+    const x = -1.25 + 2.5 * rnd(), y = -1.25 + 2.5 * rnd(), r = Math.hypot(x, y), R = outline(Math.atan2(y, x));
+    if (r > R) continue;
+    let t;
+    const tx = (x - .45) * .94 + (y + .1) * .34, ty = -(x - .45) * .34 + (y + .1) * .94;
+    const inTumour = tumour && (tx / .36) ** 2 + (ty / .5) ** 2 < 1 + .12 * Math.sin(9 * Math.atan2(ty, tx));
+    const f = foci.find(q => Math.hypot(q[0] - x, q[1] - y) < q[2]);
+    const g = glands.find(q => Math.hypot(q[0] - x, q[1] - y) < q[2]);
+    if (r / R > .9) t = 6;                                             // muscle rim
+    else if (f) t = rnd() < .68 ? 3 : 4;                               // T / B cell aggregates
+    else if (inTumour) t = rnd() < .14 ? 7 : 5;                        // tumour with macrophages
+    else if (g) t = Math.hypot(g[0] - x, g[1] - y) < .5 * g[2] ? 1 : 0; // secretory core, epithelial ring
+    else { const u = rnd(); t = u < .82 ? 2 : u < .91 ? 8 : 7; }       // stroma: fibroblast, endothelial, macrophage
+    region[i] = r / R > .9 ? 0 : f ? 1 : inTumour ? 2 : g ? 3 : 4;      // rim, aggregate, tumour, gland, stroma
+    xy[2 * i] = 2600 * x; xy[2 * i + 1] = 2600 * y; type[i] = t; i++;
+  }
+  return { xy, type, region, rnd, gauss };
+}
+const DEMO_GENES = {   // gene: types with high expression
+  EPCAM: [0, 1, 5], KRT8: [0, 1, 5], KRT18: [0, 5], MUC2: [1], TFF3: [1], SPINK4: [1],
+  COL1A1: [2], DCN: [2], LUM: [2], CD3E: [3], CD2: [3], IL7R: [3], MS4A1: [4], CD79A: [4],
+  MKI67: [5], TOP2A: [5], CEACAM5: [5], ACTA2: [6], DES: [6], MYH11: [6],
+  CD68: [7], C1QA: [7], LYZ: [7], PECAM1: [8], VWF: [8], CDH5: [8],
+  PTPRC: [3, 4, 7], VIM: [2, 6, 8, 7], ACTB: [0, 1, 2, 3, 4, 5, 6, 7, 8], MALAT1: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+};
+function kmeans(z, n, d, k, seed) {
+  const rnd = mulberry32(seed), cen = new Float32Array(k * d), lab = new Uint8Array(n), dist = new Float32Array(n).fill(Infinity);
+  const d2 = (i, c) => { let s = 0; for (let j = 0; j < d; j++) { const v = z[i * d + j] - cen[c * d + j]; s += v * v; } return s; };
+  for (let c = 0; c < k; c++) {                                        // farthest-first seeding
+    let pick = 7 * Math.floor(rnd() * n / 7);
+    if (c) { let far = -1; for (let i = 0; i < n; i += 7) if (dist[i] > far) { far = dist[i]; pick = i; } }
+    for (let j = 0; j < d; j++) cen[c * d + j] = z[pick * d + j];
+    for (let i = 0; i < n; i += 7) dist[i] = Math.min(dist[i], d2(i, c));
+  }
+  for (let it = 0; it < 14; it++) {
+    for (let i = 0; i < n; i++) { let b = 0, bd = Infinity; for (let c = 0; c < k; c++) { const v = d2(i, c); if (v < bd) { bd = v; b = c; } } lab[i] = b; }
+    const sum = new Float64Array(k * d), cnt = new Uint32Array(k);
+    for (let i = 0; i < n; i++) { cnt[lab[i]]++; for (let j = 0; j < d; j++) sum[lab[i] * d + j] += z[i * d + j]; }
+    for (let c = 0; c < k; c++) if (cnt[c]) for (let j = 0; j < d; j++) cen[c * d + j] = sum[c * d + j] / cnt[c];
+  }
+  return lab;
+}
+/* ---- a finished HEBI run exported to static files (export_example.py) ---- */
+const EXAMPLE_DIR = "data/example";
+const COLAB_URL = "https://colab.research.google.com/github/roxana9/hebi/blob/main/web/HEBI_web_colab.ipynb";
+class StaticSource {
+  constructor(base) { this.base = base; this.last = null; }
+  async meta() { this.m = await getJSON(`${this.base}/meta.json`); return this.m; }
+  async coords() { return new Float32Array(await getBuf(`${this.base}/coords.f32`)); }
+  async sections() { return new Uint8Array(await getBuf(`${this.base}/sections.u8`)); }
+  async embedding() {
+    const [i, xy] = await Promise.all([getBuf(`${this.base}/emb_index.u32`), getBuf(`${this.base}/emb_xy.f32`)]);
+    return { idx: new Uint32Array(i), xy: new Float32Array(xy) };
+  }
+  async clusters(k) {
+    const [info, lab] = await Promise.all([getJSON(`${this.base}/clusters/k${k}.json`), getBuf(`${this.base}/clusters/k${k}.u8`)]);
+    this.last = { labels: new Uint8Array(lab), k }; return { info, labels: this.last.labels };
+  }
+  async niches(k = 0, policy = "keep") {
+    const stem = `${this.base}/niches/${k ? policy : "keep"}_k${k}`;
+    const [info, lab] = await Promise.all([getJSON(`${stem}.json`), getBuf(`${stem}.u8`)]);
+    return { info, labels: new Uint8Array(lab) };
+  }
+  async gene(name) {
+    const g = this.m.genes.find(x => x.toUpperCase() === name.toUpperCase());
+    if (!g) throw new Error(`Gene ${name} is not in this dataset`);
+    const q = new Uint8Array(await getBuf(`${this.base}/genes/${encodeURIComponent(g)}.u8`)), scale = (this.m.gene_scale || {})[g] || 1;
+    const out = new Float32Array(q.length); for (let i = 0; i < q.length; i++) out[i] = q[i] * scale / 255; return out;
+  }
+  downloads(k) {
+    return [{ label: "Cluster labels as .csv", note: `example run, ${k} clusters`, filename: `hebi_example_clusters_k${k}.csv`, make: () => {
+      const rows = ["slide,cell,x,y,cluster"], L = this.last.labels, xy = S.coords;
+      for (let i = 0; i < S.n; i++) rows.push(`${S.sections[S.secOf[i]].name},${i},${xy[2 * i].toFixed(2)},${xy[2 * i + 1].toFixed(2)},${L[i]}`);
+      return new Blob([rows.join("\n") + "\n"], { type: "text/csv" }); } }];
+  }
+}
+
+class DemoSource {
+  constructor() {
+    const nA = 18000, nB = 12000, n = this.n = nA + nB, D = this.D = 8, T = 9;
+    const a = makeTissue(nA, 11, true), b = makeTissue(nB, 29, false), { rnd, gauss } = a;
+    const t = { type: new Uint8Array(n) }; t.type.set(a.type); t.type.set(b.type, nA);
+    this.region = new Uint8Array(n); this.region.set(a.region); this.region.set(b.region, nA);
+    this.xy = new Float32Array(2 * n); this.xy.set(a.xy); this.xy.set(b.xy, 2 * nA);
+    this.secOf = new Uint8Array(n); this.secOf.fill(1, nA);
+    this.slides = [{ name: "Demo slide A, with a tumour", n_cells: nA }, { name: "Demo slide B, no tumour", n_cells: nB }];
+    this.genes = Object.keys(DEMO_GENES); const G = this.genes.length;
+    const cen = Array.from({ length: T }, () => Array.from({ length: D }, () => 2.3 * gauss()));
+    const c2 = Array.from({ length: T }, (_, i) => { const a = i / T * 6.2832 + .3 * gauss(), r = 6 + 2.5 * rnd(), q = 6.2832 * rnd();
+      return [r * Math.cos(a), r * Math.sin(a), Math.cos(q), Math.sin(q)]; });
+    this.z = new Float32Array(n * D); this.emb = new Float32Array(2 * n); this.expr = new Float32Array(n * G);
+    for (let i = 0; i < n; i++) {
+      const ty = t.type[i]; for (let j = 0; j < D; j++) this.z[i * D + j] = cen[ty][j] + .8 * gauss();
+      const a = 1.15 * gauss(), b = .6 * gauss(), [ox, oy, co, si] = c2[ty];
+      this.emb[2 * i] = ox + a * co - b * si; this.emb[2 * i + 1] = oy + a * si + b * co;
+      this.genes.forEach((g, j) => { const on = DEMO_GENES[g].includes(ty);
+        if (rnd() < (on ? .88 : .07)) this.expr[i * G + j] = (on ? 2.4 : .7) * (.55 + .9 * rnd()); });
+    }
+  }
+  async meta() {
+    return { demo: true, filename: "Synthetic demo tissue", sections: this.slides, n_cells: this.n, n_genes: this.genes.length, genes: this.genes,
+      embedding: "UMAP", n_embedded: this.n, default_k: 8, min_k: 2, max_k: 24, warnings: [], has_niches: true };
+  }
+  async coords() { return this.xy; }
+  async sections() { return this.secOf; }
+  async embedding() { return { idx: Uint32Array.from({ length: this.n }, (_, i) => i), xy: this.emb }; }
+  async clusters(k) {
+    const labels = kmeans(this.z, this.n, this.D, k, 5);
+    this.last = { labels, k };
+    return { info: this.groupInfo(labels, k, `z0_kmeans_${k}`), labels };
+  }
+  async niches(k = 0) {
+    const ids = [3, 7, 12, 15, 18], labels = this.region;                // shown like prototype numbers
+    const info = this.groupInfo(labels, 5, "hebi_niche"); info.names = ids.map(String);
+    return { info, labels };
+  }
+  groupInfo(labels, k, key) {
+    const n = this.n, G = this.genes.length;
+    const sum = new Float64Array(k * G), sq = new Float64Array(k * G), nz = new Float64Array(k * G), size = new Array(k).fill(0);
+    for (let i = 0; i < n; i++) { const c = labels[i]; size[c]++;
+      for (let j = 0; j < G; j++) { const v = this.expr[i * G + j]; if (v > 0) { sum[c * G + j] += v; sq[c * G + j] += v * v; nz[c * G + j]++; } } }
+    const tot = new Float64Array(G), totSq = new Float64Array(G), totNz = new Float64Array(G);
+    for (let c = 0; c < k; c++) for (let j = 0; j < G; j++) { tot[j] += sum[c * G + j]; totSq[j] += sq[c * G + j]; totNz[j] += nz[c * G + j]; }
+    const markers = [], dotIdx = [], mean = c => this.genes.map((_, j) => sum[c * G + j] / Math.max(size[c], 1));
+    for (let c = 0; c < k; c++) {
+      const a = Math.max(size[c], 1), b = Math.max(n - size[c], 1), rows = this.genes.map((g, j) => {
+        const mi = sum[c * G + j] / a, mo = (tot[j] - sum[c * G + j]) / b;
+        const vi = Math.max(sq[c * G + j] - a * mi * mi, 0) / Math.max(a - 1, 1), vo = Math.max(totSq[j] - sq[c * G + j] - b * mo * mo, 0) / Math.max(b - 1, 1);
+        return { j, gene: g, score: +((mi - mo) / Math.sqrt(vi / a + vo / b + 1e-12)).toFixed(2), diff: mi - mo,
+          pct_in: nz[c * G + j] / a, pct_out: (totNz[j] - nz[c * G + j]) / b };
+      }).filter(r => r.score > 0).sort((p, q) => q.score - p.score);
+      markers.push(rows); rows.slice(0, 3).forEach(r => { if (!dotIdx.includes(r.j)) dotIdx.push(r.j); });
+    }
+    return { k, obs_key: key, names: size.map((_, c) => String(c)), sizes: size, markers,
+      dotplot: { genes: dotIdx.map(j => this.genes[j]), mean: size.map((_, c) => dotIdx.map(j => mean(c)[j])),
+        pct: size.map((_, c) => dotIdx.map(j => nz[c * G + j] / Math.max(size[c], 1))) } };
+  }
+  async gene(name) {
+    const j = this.genes.indexOf(name.toUpperCase()), G = this.genes.length, out = new Float32Array(this.n);
+    if (j < 0) throw new Error(`Gene ${name} is not in this dataset`);
+    for (let i = 0; i < this.n; i++) out[i] = this.expr[i * G + j]; return out;
+  }
+  downloads(k) {
+    return [{ label: "Cluster labels as .csv", note: "synthetic demo cells", make: () => {
+      const rows = ["slide,cell_id,x,y,cluster"]; const L = this.last.labels;
+      for (let i = 0; i < this.n; i++) rows.push(`${this.secOf[i] ? "B" : "A"},demo_${i},${this.xy[2 * i].toFixed(1)},${this.xy[2 * i + 1].toFixed(1)},${L[i]}`);
+      return new Blob([rows.join("\n") + "\n"], { type: "text/csv" }); }, filename: `demo_tissue_clusters_k${k}.csv` }];
+  }
+}
+
+/* ============================================================
+   App state and rendering
+   ============================================================ */
+const S = { src: null, meta: null, n: 0, labels: null, info: null, k: 8, focus: null, sel: null, selN: 0,
+  mode: "cluster", gene: null, geneVals: null, geneMax: 1, embIdx: null, embPos: null, coords: null, flipY: false,
+  secOf: null, sections: [], group: "clusters" };
+const word = () => S.group === "niches" ? "Niche" : "Cluster";
+let tissue, emb, colT, colE;
+const tip = $("#tip");
+
+function show(view) { for (const v of ["startView", "progressView", "appView"]) $("#" + v).hidden = v !== view;
+  if (typeof MODE_STAGE !== "undefined") { if (view === "startView") MODE_STAGE.start(); else MODE_STAGE.stop(); }
+  if (view !== "progressView" && typeof stopDiscoveries === "function") stopDiscoveries();
+  $("#newBtn").hidden = view === "startView"; $("#dlMenu").hidden = view !== "appView"; }
+
+/* Each slide is scaled into its own tile, tiles side by side, so slides of
+   different size or units are all readable. */
+function layoutSlides() {
+  const m = S.sections.length, n = S.n, src = S.coords, out = new Float32Array(2 * n);
+  const bb = Array.from({ length: m }, () => [Infinity, -Infinity, Infinity, -Infinity]);
+  for (let i = 0; i < n; i++) { const b = bb[S.secOf[i]], x = src[2 * i], y = src[2 * i + 1];
+    if (x < b[0]) b[0] = x; if (x > b[1]) b[1] = x; if (y < b[2]) b[2] = y; if (y > b[3]) b[3] = y; }
+  let cols = 1, best = 0; const gap = .2;
+  for (let c = 1; c <= m; c++) { const size = Math.min(tissue.W / c, (tissue.H - 56) / Math.ceil(m / c)); if (size > best + 1) { best = size; cols = c; } }
+  const tf = bb.map((b, k) => { const w = (b[1] - b[0]) || 1, h = (b[3] - b[2]) || 1, sc = 1 / Math.max(w, h);
+    return { sc, x0: b[0], y0: b[2], hh: h * sc, ox: (k % cols) * (1 + gap) + (1 - w * sc) / 2, oy: -Math.floor(k / cols) * (1 + gap) + (1 - h * sc) / 2, ww: w * sc }; });
+  for (let i = 0; i < n; i++) { const t = tf[S.secOf[i]]; let y = (src[2 * i + 1] - t.y0) * t.sc; if (S.flipY) y = t.hh - y;
+    out[2 * i] = t.ox + (src[2 * i] - t.x0) * t.sc; out[2 * i + 1] = t.oy + y; }
+  tissue.labels = m > 1 ? tf.map((t, k) => ({ x: t.ox, y: t.oy + t.hh, w: t.ww, text: S.sections[k].name })) : [];
+  tissue.setData(out, false);
+}
+
+function isActive(i) { return (S.focus === null || S.labels[i] === S.focus) && (!S.sel || S.sel[i]); }
+function recolor() {
+  const n = S.n, gene = S.mode === "gene" && S.geneVals;
+  for (let i = 0, o = 0; i < n; i++, o += 4) {
+    let c, a = 236;
+    if (gene) { const v = S.geneVals[i]; if (v > 0) c = GENE_LUT[Math.min(255, Math.round(255 * v / S.geneMax))]; else { c = GENE_ZERO; a = 150; } }
+    else c = PALETTE[(S.mode === "slide" ? S.secOf[i] : S.labels[i]) % PALETTE.length];
+    if (!isActive(i)) a = 20;
+    colT[o] = c[0]; colT[o + 1] = c[1]; colT[o + 2] = c[2]; colT[o + 3] = a;
+  }
+  const m = S.embIdx.length;
+  for (let j = 0; j < m; j++) { const s = 4 * S.embIdx[j]; colE.set(colT.subarray(s, s + 4), 4 * j); }
+  tissue.setColors(colT); emb.setColors(colE);
+}
+
+function renderFacts() {
+  const m = S.meta, f = $("#facts"); f.replaceChildren();
+  const add = (html, cls) => { const s = el("span", cls ? { className: cls } : {}); s.innerHTML = html; f.append(s); };
+  if (m.demo) add("Synthetic demo, not real data", "demo-tag");
+  if (m.example) add("Example run, computed in advance", "demo-tag");
+  const many = m.sections.length > 1;
+  if (many) add(`<b>${m.sections.length}</b> slides, analysed together`);
+  add(`<b>${fmt(m.n_cells)}</b> cells`);
+  add(m.demo ? `<b>${fmt(m.n_genes)}</b> genes` : many ? `<b>${fmt(m.n_genes)}</b> genes shared by the slides`
+    : `<b>${fmt(m.n_genes)}</b> of ${fmt(m.sections[0].n_genes_file)} genes used`);
+  const start = m.init === "pretrained" ? "pretrained weights" : "random weights";
+  if (!m.demo) add(m.mode === "continual" ? `trained for <b>${m.epochs}</b> epochs on ${many ? "these slides" : "this section"}, from ${start}`
+    : m.init === "pretrained" ? "pretrained weights, nothing fitted to this data" : "encoder weights untrained, nothing fitted to this data");
+  $("#barTitle").textContent = m.filename;
+  const w = $("#warnings"); w.replaceChildren(...(m.warnings || []).map(t => el("div", { className: "notice", text: t })));
+  const rd = $("#runDetails"); rd.replaceChildren();
+  const row = (k, v) => rd.append(el("dt", { text: k }), el("dd", { text: v }));
+  if (m.demo) { row("Data", "Generated in the browser: two slides with nine cell types laid out as glands, immune aggregates and stroma; slide A also has a tumour region.");
+    row("Clusters", "k-means on a simulated cell embedding."); row("Niches", "the tissue regions the demo was generated from.");
+    row("HEBI", "Not run for the demo."); }
+  else {
+    if (m.mode === "continual") {
+      row("Model", (m.init === "pretrained" ? `HEBI from the pretrained checkpoint ${m.checkpoint} (niche level re-initialised)` : `HEBI, randomly initialised (seed ${m.seed})`) + `, then trained for ${m.epochs} epochs on ${many ? "all uploaded slides together" : "this section"} with its self-supervised objective (learning rate ${m.lr})`);
+      if (m.niche_objective === "spatial") row("Niche objective", "spatially regularised (experimental): original losses plus assignment sharpness " +
+        `${m.spatial_settings.sharp_weight} and spatial consistency ${m.spatial_settings.spatial_weight} between neighbouring communities`);
+      else if (m.niche_objective) row("Niche objective", "original");
+      row("Niches", "the learned niche prototype each cell attends to most, shared by all slides" +
+        (nicheKs("keep").length ? `; also merged or refined to ${nicheKs("keep")[0]}–${nicheKs("keep").slice(-1)[0]} niches with the resolution-matched assignment (prototype mapping shared across slides). Small niches: "Keep" leaves prototypes under 0.5% of cells as their own leaves (paper default); "Original, absorb small" attaches each of them to its nearest compatible prototype before merging; "Size and space aware" (experimental) scales each merge cost by the harmonic mean of the two niche sizes and lowers it for niches in spatial contact, so small or scattered niches merge before large, spatially separate ones` : ""));
+    } else row("Model", "HEBI encoder, one forward pass, " + (m.init === "pretrained" ? `pretrained weights from ${m.checkpoint}` : `randomly initialised weights (seed ${m.seed})`));
+    const form = sec => { const ap = (sec.normalisation_applied || []).join(" + ");
+      if (sec.normalisation_note) return sec.normalisation_note + (ap ? `; ${ap} applied for the model` : "");
+      return `${String(sec.normalisation_on_input).replace(/_/g, " ")}` + (ap ? `, ${ap} applied for the model` : ", used as they are"); };
+    const reach = sec => sec.reach_cell_diameters ? `, about ${(+sec.reach_cell_diameters).toFixed(1)} cell diameters` : "";
+    const comm = m.n_communities || [];
+    row("Communities", `METIS, ${fmt(m.n_metis)} requested per section` + (comm.length ? `; ${comm.map(c => fmt(c)).join(", ")} used` +
+      ` (about ${comm.map((c, i) => Math.round(m.sections[i].n_cells / Math.max(c, 1))).join(", ")} cells each)` : ""));
+    if (many) { row("Spatial graph", `${m.k_graph} nearest neighbours per cell, built for each slide separately`);
+      for (const sec of m.sections) row(sec.name, `${fmt(sec.n_cells)} cells; ${form(sec)}${reach(sec).replace(", about", "; neighbourhood about")}`);
+      row("Clusters", "k-means on the cell-level embedding (z0) of all slides together, so a cluster means the same on every slide"); }
+    else { row("Spatial graph", `${m.k_graph} nearest neighbours per cell` + reach(m.sections[0]));
+      row("Input values", form(m.sections[0]));
+      row("Clusters", "k-means on the cell-level embedding (z0)"); }
+    if (m.n_hvg) row("Genes", `top ${fmt(m.n_hvg)} highly variable genes (scanpy, seurat flavour` + (many ? ", ranked across slides" : "") + "), then those in the HEBI vocabulary");
+    row("Normalisation", m.normalise ? "library-size normalisation requested (applied to files with raw counts)" : "off; log1p only where needed");
+    row("Marker genes", "Welch t-test, each cluster against all other cells");
+    row("Species", m.species); row("Ran on", m.device);
+    const t = m.timings || {}; row("Time", `encoding ${t.encode ?? "?"} s, embedding view ${t.embed ?? "?"} s`);
+  }
+  $("#embName").textContent = `Cell embedding (${m.embedding})`;
+  $("#embNote").textContent = m.n_embedded < m.n_cells ? `${fmt(m.n_embedded)} sampled cells` : "";
+}
+
+/* Where each group is present: section-normalised share pi >= 0.15, as in the
+   niche-assignment method. */
+function groupSupport() {
+  const m = S.sections.length, k = S.info.names.length; if (m < 2) return null;
+  const cnt = Array.from({ length: k }, () => new Array(m).fill(0)), tot = new Array(m).fill(0);
+  for (let i = 0; i < S.n; i++) { cnt[S.labels[i]][S.secOf[i]]++; tot[S.secOf[i]]++; }
+  return cnt.map(row => { const q = row.map((v, s) => v / Math.max(tot[s], 1)), sum = q.reduce((a, b) => a + b, 0) || 1;
+    const present = q.map((v, s) => v / sum >= .15 ? s : -1).filter(s => s >= 0);
+    if (present.length === m) return { text: "in all slides", solo: false };
+    if (present.length === 1) return { text: `only in ${S.sections[present[0]].name}`, solo: true };
+    return { text: "in " + present.map(s => S.sections[s].name).join(", "), solo: false }; });
+}
+function renderClusters() {
+  const { names, sizes } = S.info, list = $("#clusterList"); list.replaceChildren();
+  $("#clusterNote").textContent = `${names.length} ${S.group === "niches" ? "niches" : "groups"}`;
+  $("#clusterList").previousElementSibling.firstChild.textContent = S.group === "niches" ? "Niches" : "Clusters";
+  const sup = groupSupport();
+  names.forEach((name, c) => {
+    const label = el("span", { text: `${word()} ${name}` });
+    if (sup) label.append(el("span", { className: "tag" + (sup[c].solo ? " solo" : ""), text: sup[c].text }));
+    const path = S.group === "niches" && S.info.paths ? S.info.paths[c] : "";
+    const b = el("button", { type: "button", "aria-pressed": String(S.focus === c),
+      title: path ? `Prototypes ${path}. Click to show only this niche.` : `Show only this ${word().toLowerCase()}` }, [
+      el("span", { className: "sw", style: `background:${rgbCss(PALETTE[c % PALETTE.length])}` }),
+      label, el("span", { className: "ct num", text: fmt(sizes[c]) }),
+      el("span", { className: "pc num", text: pct(sizes[c] / S.n, 1) })]);
+    b.onclick = () => setFocus(S.focus === c ? null : c);
+    list.append(el("li", {}, b));
+  });
+}
+function renderSlides() {
+  const many = S.sections.length > 1; $("#slideCard").hidden = !many; if (!many) return;
+  const k = S.info.names.length, cnt = S.sections.map(() => new Array(k).fill(0)), tot = S.sections.map(() => 0);
+  for (let i = 0; i < S.n; i++) { cnt[S.secOf[i]][S.labels[i]]++; tot[S.secOf[i]]++; }
+  $("#slideList").replaceChildren(...S.sections.map((sec, s) => el("li", {}, [
+    el("div", { className: "nm" }, [
+      ...(S.mode === "slide" ? [el("i", { className: "sw", style: `background:${rgbCss(PALETTE[s % PALETTE.length])}` })] : []),
+      el("b", { text: sec.name }), el("span", { className: "num", text: `${fmt(tot[s])} cells` })]),
+    el("div", { className: "mix" }, cnt[s].map((v, c) => v ? el("i", { style: `flex:${v};background:${rgbCss(PALETTE[c % PALETTE.length])}`,
+      title: `${word()} ${S.info.names[c]}: ${pct(v / tot[s], 1)} of this slide` }) : null).filter(Boolean))])));
+}
+function renderMarkers() {
+  const has = S.focus !== null;
+  $("#markerHint").hidden = has; $("#markerWrap").hidden = !has;
+  $("#markerTitle").textContent = has ? `Marker genes of ${word().toLowerCase()} ${S.info.names[S.focus]}` : "Marker genes";
+  if (!has) return;
+  const body = $("#markerBody"); body.replaceChildren();
+  const rows = S.info.markers[S.focus] || [];
+  if (!rows.length) body.append(el("tr", {}, el("td", { colSpan: 4, text: "No gene is higher in this cluster than elsewhere." })));
+  for (const r of rows) {
+    const g = el("button", { className: "linkbtn", type: "button", text: r.gene, title: `Colour cells by ${r.gene}` });
+    g.onclick = () => setGene(r.gene);
+    body.append(el("tr", {}, [el("td", {}, g), el("td", { className: "num", text: (+r.score).toFixed(1) }),
+      el("td", { className: "num", text: pct(r.pct_in) }), el("td", { className: "num", text: pct(r.pct_out) })]));
+  }
+}
+function renderSelection() {
+  const card = $("#selCard"); card.hidden = !S.sel; if (!S.sel) return;
+  const k = S.info.names.length, cnt = new Array(k).fill(0);
+  for (let i = 0; i < S.n; i++) if (S.sel[i]) cnt[S.labels[i]]++;
+  $("#selTitle").textContent = `${fmt(S.selN)} cells selected`;
+  const order = cnt.map((v, c) => [v, c]).filter(x => x[0]).sort((a, b) => b[0] - a[0]);
+  $("#selBar").replaceChildren(...order.map(([v, c]) => el("i", { style: `flex:${v};background:${rgbCss(PALETTE[c % PALETTE.length])}`, title: `${word()} ${S.info.names[c]}: ${fmt(v)}` })));
+  $("#selList").replaceChildren(...order.slice(0, 4).map(([v, c]) => el("li", { text: `${word()} ${S.info.names[c]}: ${fmt(v)} cells (${pct(v / S.selN)})` })));
+}
+function renderDotplot() {
+  const { genes, mean, pct: P } = S.info.dotplot, names = S.info.names, box = $("#dotplot");
+  if (!genes.length) { box.replaceChildren(el("p", { className: "plain", text: "No marker genes to show." })); return; }
+  const cw = 26, rh = 24, left = 96, top = 8, labelH = 78, W = left + genes.length * cw + 12, H = top + names.length * rh + labelH;
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Dot plot of the top marker genes of each cluster");
+  const mk = (t, a, txt) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; return e; };
+  const colMax = genes.map((_, j) => Math.max(1e-9, ...mean.map(r => r[j])));
+  names.forEach((name, c) => {
+    const y = top + c * rh + rh / 2;
+    if (c % 2) svg.append(mk("rect", { x: 0, y: y - rh / 2, width: W, height: rh, fill: "#f7f4fb" }));
+    svg.append(mk("circle", { cx: 8, cy: y, r: 5, fill: rgbCss(PALETTE[c % PALETTE.length]) }));
+    const t = mk("text", { x: 20, y: y + 4.5, "font-size": 13, fill: "#241d33", style: "cursor:pointer", tabindex: 0, role: "button" }, `${word()} ${name}`);
+    t.addEventListener("click", () => setFocus(c)); t.addEventListener("keydown", e => { if (e.key === "Enter") setFocus(c); });
+    svg.append(t);
+    genes.forEach((g, j) => {
+      const p = P[c][j], v = mean[c][j] / colMax[j], x = left + j * cw + cw / 2;
+      if (p < .005) return;
+      const d = mk("circle", { cx: x, cy: y, r: (1.6 + 8.4 * Math.sqrt(p)).toFixed(2), fill: rgbCss(DOT_LUT[Math.round(255 * clamp(v, 0, 1))]) });
+      const hit = mk("rect", { x: x - cw / 2, y: y - rh / 2, width: cw, height: rh, fill: "transparent" });
+      hit.addEventListener("mousemove", e => showTip(e.clientX, e.clientY, `<b>${g}</b> in cluster ${name}<br><span>mean</span> ${mean[c][j].toFixed(2)} <span>, expressed in</span> ${pct(p)}`));
+      hit.addEventListener("mouseleave", hideTip);
+      svg.append(d, hit);
+    });
+  });
+  genes.forEach((g, j) => {
+    const x = left + j * cw + cw / 2, y = top + names.length * rh + 12;
+    const t = mk("text", { x, y, "font-size": 12, fill: "#5c5470", "text-anchor": "end", transform: `rotate(-55 ${x} ${y})`, style: "cursor:pointer", tabindex: 0, role: "button" }, g);
+    t.addEventListener("click", () => setGene(g)); t.addEventListener("keydown", e => { if (e.key === "Enter") setGene(g); });
+    svg.append(t);
+  });
+  box.replaceChildren(svg);
+}
+function renderDownloads() {
+  const list = $("#dlList"); list.replaceChildren();
+  for (const d of S.src.downloads(S.k)) {
+    const inner = [d.label, el("small", { text: d.note })];
+    if (d.href) list.append(el("a", { href: d.href, download: "" }, inner));
+    else { const b = el("button", { type: "button" }, inner);
+      b.onclick = () => { const u = URL.createObjectURL(d.make()); el("a", { href: u, download: d.filename }).click(); setTimeout(() => URL.revokeObjectURL(u), 2000); };
+      list.append(b); }
+  }
+}
+
+function showTip(x, y, html) { tip.innerHTML = html; tip.hidden = false;
+  const r = tip.getBoundingClientRect(); tip.style.left = clamp(x + 14, 4, innerWidth - r.width - 4) + "px"; tip.style.top = clamp(y + 14, 4, innerHeight - r.height - 4) + "px"; }
+function hideTip() { tip.hidden = true; }
+function cellTip(i, x, y) {
+  if (i < 0) return hideTip();
+  const c = S.labels[i]; let h = `<i style="background:${rgbCss(PALETTE[c % PALETTE.length])}"></i>${word()} ${S.info.names[c]}`;
+  if (S.mode === "gene" && S.geneVals) h += `<br><span>${S.gene}</span> ${S.geneVals[i].toFixed(2)}`;
+  if (S.sections.length > 1) h += `<br><span>${S.sections[S.secOf[i]].name}</span>`;
+  showTip(x, y, h);
+}
+
+function setFocus(c) { S.focus = c; renderClusters(); renderMarkers(); recolor(); }
+function setSelection(indices) {
+  if (!indices || !indices.length) { S.sel = null; S.selN = 0; }
+  else { S.sel = new Uint8Array(S.n); for (const i of indices) S.sel[i] = 1; S.selN = indices.length; }
+  renderSelection(); recolor();
+}
+function setMode(mode) {
+  if (mode === "gene" && !S.geneVals) { $("#geneInput").focus(); return; }
+  S.mode = mode;
+  for (const [id, m] of [["modeCluster", "cluster"], ["modeGene", "gene"], ["modeSlide", "slide"]]) $("#" + id).setAttribute("aria-pressed", String(mode === m));
+  $("#geneScale").hidden = mode !== "gene"; if (S.info) renderSlides(); recolor();
+}
+async function setGene(name) {
+  try {
+    const vals = await S.src.gene(name);
+    const pos = []; const step = Math.max(1, Math.floor(vals.length / 60000));
+    for (let i = 0; i < vals.length; i += step) if (vals[i] > 0) pos.push(vals[i]);
+    pos.sort((a, b) => a - b);
+    S.gene = name.toUpperCase(); S.geneVals = vals; S.geneMax = pos.length ? Math.max(pos[Math.floor(.995 * (pos.length - 1))], 1e-6) : 1;
+    $("#geneInput").value = S.gene; $("#geneScaleName").textContent = S.gene; $("#geneScaleMax").textContent = S.geneMax.toFixed(1);
+    setMode("gene");
+  } catch (e) { showTip(innerWidth / 2 - 100, 90, e.message); setTimeout(hideTip, 2600); }
+}
+function applyGroup(info, labels) {
+  S.info = info; S.labels = labels; S.focus = null;
+  $("#kctl").hidden = S.group === "niches";
+  $("#nicheKctl").hidden = S.group !== "niches" || !nicheKs().length;
+  $("#tinyCtl").hidden = S.group !== "niches" || !(S.nicheK > 0);
+  $("#groupClusters").setAttribute("aria-pressed", String(S.group === "clusters"));
+  $("#groupNiches").setAttribute("aria-pressed", String(S.group === "niches"));
+  renderClusters(); renderSlides(); renderMarkers(); renderSelection(); renderDotplot(); renderDownloads(); recolor();
+}
+function nicheKs(policy = S.tiny || "keep") {
+  const ks = S.meta && S.meta.niche_ks;
+  return Array.isArray(ks) ? ks : (ks && ks[policy]) || [];
+}
+function fillNicheK() {
+  const keep = S.nicheK;
+  $("#nicheK").replaceChildren(el("option", { value: "0", text: `Learned prototypes (${S.meta.n_prototypes || "all"})` }),
+    ...nicheKs().map(k => el("option", { value: String(k), text: `${k} niches` })));
+  S.nicheK = nicheKs().includes(keep) ? keep : 0;
+  $("#nicheK").value = String(S.nicheK);
+}
+async function loadNiches(k = S.nicheK || 0) {
+  $("#appView").classList.add("busy");
+  try { const { info, labels } = await S.src.niches(k, S.tiny || "keep"); S.group = "niches"; S.nicheK = k; $("#nicheK").value = String(k); applyGroup(info, labels); }
+  catch (e) { alertBar(e.message); }
+  finally { $("#appView").classList.remove("busy"); }
+}
+async function loadClusters(k) {
+  $("#appView").classList.add("busy");
+  try {
+    const { info, labels } = await S.src.clusters(k);
+    S.k = k; S.group = "clusters"; applyGroup(info, labels);
+    $("#kRange").value = k; $("#kOut").textContent = k;
+  } catch (e) { alertBar(e.message); $("#kRange").value = S.k; $("#kOut").textContent = S.k; }
+  finally { $("#appView").classList.remove("busy"); }
+}
+function alertBar(msg) { $("#warnings").prepend(el("div", { className: "notice err", text: msg })); }
+
+function ensureViews() {
+  if (tissue) return;
+  tissue = new Scatter($("#tissueView"), {
+    hover: (i, x, y) => { cellTip(i, x, y); emb.setMarker(i < 0 ? -1 : S.embPos[i]); },
+    click: i => setFocus(i < 0 || S.labels[i] === S.focus ? null : S.labels[i]),
+    lasso: hits => setSelection(hits),
+  });
+  emb = new Scatter($("#embView"), {
+    hover: (j, x, y) => { const i = j < 0 ? -1 : S.embIdx[j]; cellTip(i, x, y); tissue.setMarker(i); },
+    click: j => { const i = j < 0 ? -1 : S.embIdx[j]; setFocus(i < 0 || S.labels[i] === S.focus ? null : S.labels[i]); },
+    lasso: hits => setSelection(hits.map(j => S.embIdx[j])),
+  });
+  tissue.pickable = i => isActive(i); emb.pickable = j => isActive(S.embIdx[j]);
+  for (const [root, sc] of [[$("#tissueView"), tissue], [$("#embView"), emb]]) {
+    root.querySelectorAll(".tool").forEach(b => b.addEventListener("click", () => {
+      const act = b.dataset.act;
+      if (act === "reset") sc.fit();
+      else if (act === "flip") { S.flipY = !S.flipY; layoutSlides(); tissue.setColors(colT); }
+      else if (act === "lasso") { const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", String(on)); sc.setTool(on ? "lasso" : "pan"); }
+    }));
+  }
+}
+
+async function openSource(src) {
+  S.src = src; S.meta = await src.meta();
+  const [coords, e, secOf] = await Promise.all([src.coords(), src.embedding(), src.sections()]);
+  S.n = S.meta.n_cells; S.coords = coords; S.embIdx = e.idx; S.sel = null; S.selN = 0; S.focus = null; S.info = null;
+  S.secOf = secOf; S.sections = S.meta.sections;
+  S.mode = "cluster"; S.gene = null; S.geneVals = null; S.flipY = false;
+  S.embPos = new Int32Array(S.n).fill(-1); for (let j = 0; j < e.idx.length; j++) S.embPos[e.idx[j]] = j;
+  colT = new Uint8Array(4 * S.n); colE = new Uint8Array(4 * e.idx.length);
+  show("appView"); $("#viewGrid").classList.toggle("multi", S.sections.length > 1); ensureViews();
+  $("#geneInput").value = ""; $("#geneScale").hidden = true;
+  $("#modeCluster").setAttribute("aria-pressed", "true"); $("#modeGene").setAttribute("aria-pressed", "false");
+  $("#modeSlide").setAttribute("aria-pressed", "false"); $("#modeSlide").hidden = S.sections.length < 2;
+  $("#groupSeg").hidden = !S.meta.has_niches; S.group = "clusters"; S.nicheK = 0; S.tiny = "keep";
+  $("#tinyPolicy").value = "keep"; fillNicheK();
+  const kr = $("#kRange"); kr.min = S.meta.min_k; kr.max = S.meta.max_k;
+  renderFacts();
+  tissue.resize(); emb.resize();
+  layoutSlides(); emb.setData(e.xy, false);
+  await loadClusters(clamp(S.meta.default_k, S.meta.min_k, S.meta.max_k));
+}
+
+/* ============================================================
+   Start screen, upload and progress
+   ============================================================ */
+const STAGE_TEXT = { read: "Checking the files", graph: "Building the spatial neighbour graph",
+  adapt: "Training HEBI on your slides", encode: "Encoding the cells with HEBI", niches: "Assigning niches at each resolution",
+  cluster: "Grouping cells and ranking marker genes", embed: "Laying out the embedding view" };
+let health = null, pollTimer = null, RUN_MODE = "zero_shot";
+
+/* Overall progress. Stages get rough weights (training dominates when present);
+   inside training the epoch count gives the fraction. Time left is extrapolated
+   from the time so far once there is enough progress to go on. */
+const STAGE_WEIGHT = { read: 4, graph: 8, adapt: 60, encode: 14, niches: 8, cluster: 4, embed: 4 };
+let runEta = null;
+function updateMeter(s) {
+  const m = $("#runMeter"), stages = s.stages || [];
+  if (s.status === "queued") { m.hidden = false; $("#runStep").textContent = `Waiting in the queue, ${s.queue_ahead} run${s.queue_ahead === 1 ? "" : "s"} ahead`;
+    $("#runLeft").textContent = ""; $("#runFill").style.width = "0"; return; }
+  if (!stages.length) return;
+  const idx = s.status === "done" || s.stage === "finished" ? stages.length : Math.max(0, stages.indexOf(s.stage));
+  const tot = stages.reduce((a, k) => a + (STAGE_WEIGHT[k] || 5), 0);
+  let done = 0; for (let i = 0; i < Math.min(idx, stages.length); i++) done += STAGE_WEIGHT[stages[i]] || 5;
+  let frac = 0, label = "";
+  if (idx < stages.length) {
+    const k = stages[idx], ep = /epoch (\d+) of (\d+)/.exec(s.detail || "");
+    frac = k === "adapt" && ep ? (+ep[1] - 1) / +ep[2] : 0.4;
+    label = `Step ${idx + 1} of ${stages.length}: ${STAGE_TEXT[k] || k}` + (k === "adapt" && ep ? `, epoch ${ep[1]} of ${ep[2]}` : "");
+    m.classList.toggle("hot", k === "adapt");
+  } else label = "Finished";
+  const p = clamp((done + frac * (STAGE_WEIGHT[stages[idx]] || 5)) / tot, 0, 1);
+  m.hidden = false; $("#runStep").textContent = label; $("#runFill").style.width = pct(p);
+  let left = "";
+  if (p >= 1) left = "done";
+  else if (p > 0.08 && s.elapsed > 15) {
+    const est = s.elapsed * (1 - p) / p; runEta = runEta === null ? est : 0.7 * runEta + 0.3 * est;
+    const t = runEta < 60 ? "under a minute" : runEta < 3600 ? `about ${Math.round(runEta / 60)} min` : `about ${(runEta / 3600).toFixed(1)} h`;
+    left = `${Math.round(100 * p)}%, ${t} left`;
+  } else left = `${Math.round(100 * p)}%, estimating time left`;
+  $("#runLeft").textContent = left;
+}
+
+function drawSteps(stages, stage, status) {
+  const idx = stage === "finished" ? stages.length : stages.indexOf(stage);
+  $("#steps").replaceChildren(...stages.map((s, i) => {
+    const done = i < idx || status === "done", now = !done && i === idx && status === "running";
+    const tone = now ? (s === "adapt" ? " heat" : s === "encode" && RUN_MODE === "zero_shot" ? " cold" : "") : "";
+    return el("li", { className: done ? "done" : now ? "now" + tone : "" }, [el("i", { text: done ? "✓" : "" }), el("span", { text: STAGE_TEXT[s] || s })]);
+  }));
+}
+function failProgress(msg) {
+  clearInterval(pollTimer); PROG_STAGE.stop(); stopDiscoveries(); $("#progError").hidden = false; $("#progError").textContent = msg;
+  $("#progBack").hidden = false; $("#uploadBar").hidden = true;
+  document.querySelectorAll("#steps li.now").forEach(li => li.className = "");
+}
+/* files waiting on the start screen */
+let chosen = [];
+function renderChosen() {
+  $("#chosen").hidden = !chosen.length; if (!chosen.length) return;
+  $("#chosenList").replaceChildren(...chosen.map((f, i) => {
+    const rm = el("button", { className: "linkbtn", type: "button", text: "Remove" }); rm.onclick = () => { chosen.splice(i, 1); renderChosen(); };
+    return el("li", {}, [el("b", { text: f.name }), el("span", { className: "num", text: `${(f.size / 1048576).toFixed(0)} MB` }), rm]);
+  }));
+  const many = chosen.length > 1;
+  $("#runBtn").textContent = many ? `Run HEBI on ${chosen.length} slides together` : "Run HEBI on this section";
+  $("#chosenNote").textContent = many ? "The slides are encoded by the same model and grouped together, so a group means the same thing on every slide."
+    : "Add more files to analyse several slides together.";
+}
+function addFiles(list) {
+  if (!health || !health.ok) return;
+  if (health.pretrained_available) $("#serverNote").hidden = true;
+  for (const f of list) {
+    if (!/\.h5ad$/i.test(f.name)) { startError(`${f.name} is not an .h5ad file.`); continue; }
+    if (f.size > health.max_upload_gb * 1024 ** 3) { startError(`${f.name} is larger than the ${health.max_upload_gb} GB this server accepts.`); continue; }
+    if (chosen.some(c => c.name === f.name && c.size === f.size)) continue;
+    if (chosen.length >= health.max_files) { startError(`A run takes at most ${health.max_files} slides.`); break; }
+    chosen.push(f);
+  }
+  renderChosen();
+}
+function uploadOne(id, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/jobs/${id}/files?filename=${encodeURIComponent(file.name)}`);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded); };
+    xhr.onerror = () => reject(new Error("The upload did not reach the server. Check the connection and try again."));
+    xhr.onload = () => { let j = {}; try { j = JSON.parse(xhr.responseText); } catch (_) {}
+      xhr.status === 200 ? resolve() : reject(new Error(j.error || (j.detail && JSON.stringify(j.detail)) || `Upload failed (${xhr.status}).`)); };
+    xhr.send(file);
+  });
+}
+async function startRun() {
+  if (!health || !health.ok || !chosen.length) return;
+  const files = chosen.slice(), many = files.length > 1, name = many ? `${files.length} slides` : files[0].name;
+  const total = files.reduce((a, f) => a + f.size, 0);
+  show("progressView");
+  startDiscoveries();
+  $("#progTitle").textContent = many ? `Working on your ${files.length} slides` : "Working on your section";
+  $("#progSub").textContent = `${name}, ${(total / 1048576).toFixed(0)} MB`;
+  $("#progError").hidden = true; $("#progBack").hidden = true; $("#progBack").textContent = "Back to the files"; $("#progLog").textContent = ""; $("#uploadBar").hidden = false;
+  const bar = $("#uploadBar div"); bar.style.width = "0";
+  const mode = $("#optMode").value; RUN_MODE = mode;
+  PROG_STAGE.set(mode === "continual" ? 1 : 0, true); PROG_STAGE.start();
+  $("#epochBar").hidden = true; $("#epochBar div").style.width = "0"; $("#runMeter").hidden = true; runEta = null;
+  drawSteps(Object.keys(STAGE_TEXT).filter(k => k !== "adapt" || mode === "continual"), null, "uploading");
+  const q = new URLSearchParams({ species: $("#optSpecies").value, k_graph: $("#optK").value || 30,
+    seed: $("#optSeed").value || 0, n_clusters: $("#optClusters").value || 8,
+    mode, init: $("#optInit").value, niche_objective: $("#optNiche").value, epochs: $("#optEpochs").value || 10, lr: $("#optLr").value, normalise: $("#optNorm").value,
+    n_hvg: $("#optHvg").value, n_metis: $("#optMetis").value || 1024 });
+  try {
+    const r = await fetch("/api/jobs?" + q, { method: "POST" }), j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || (j.detail && JSON.stringify(j.detail)) || `The server refused the run (${r.status}).`);
+    let sent = 0;
+    for (const [i, f] of files.entries()) {
+      await uploadOne(j.job_id, f, loaded => { bar.style.width = pct((sent + loaded) / total);
+        $("#progSub").textContent = `Uploading ${f.name}` + (many ? ` (${i + 1} of ${files.length})` : "") + `: ${pct((sent + loaded) / total)}`; });
+      sent += f.size;
+    }
+    const st = await fetch(`/api/jobs/${j.job_id}/start`, { method: "POST" });
+    if (!st.ok) { const e = await st.json().catch(() => ({})); throw new Error(e.error || "The run could not be started."); }
+    $("#uploadBar").hidden = true; poll(j.job_id, name);
+  } catch (e) { failProgress(e.message); }
+}
+function poll(id, name) {
+  const tick = async () => {
+    let s; try { s = await getJSON(`/api/jobs/${id}`); } catch (e) { return failProgress(e.message); }
+    $("#progLog").textContent = (s.log || []).join("\n");
+    $("#progSub").textContent = s.status === "queued" ? `${name}: waiting, ${s.queue_ahead} run${s.queue_ahead === 1 ? "" : "s"} ahead`
+      : `${name}: ${Math.round(s.elapsed)} s so far` + (s.detail ? `, training ${s.detail}` : "");
+    drawSteps(s.stages, s.stage, s.status);
+    const ep = /epoch (\d+) of (\d+)/.exec(s.detail || "");
+    updateMeter(s);
+    if (ep && s.stage === "adapt") { $("#epochBar div").style.width = pct(+ep[1] / +ep[2]);
+      PROG_STAGE.heat = 0.6 + 0.4 * (+ep[1] / +ep[2]); }
+    else if (s.stage !== "adapt") $("#epochBar").hidden = true;
+    if (s.status === "error") return failProgress(s.error || "The run stopped with an error. The run log has the details.");
+    if (s.status === "done") { clearInterval(pollTimer); PROG_STAGE.stop(); stopDiscoveries();
+      try { await openSource(new ApiSource(id)); chosen = []; renderChosen(); } catch (e) { show("progressView"); failProgress(e.message); } }
+  };
+  clearInterval(pollTimer); pollTimer = setInterval(tick, 1500); tick();
+}
+function startError(msg) { const n = $("#serverNote"); n.hidden = false; n.textContent = msg; n.scrollIntoView({ block: "nearest" }); }
+
+async function checkServer() {
+  try {
+    if (location.protocol === "file:") throw new Error("opened as a file");
+    // The first check can take a while: the server imports torch and HEBI before it answers.
+    $("#pickBtn").disabled = true; $("#dropSub").textContent = "connecting to the HEBI server, this can take a minute";
+    const ctl = new AbortController(); setTimeout(() => ctl.abort(), 180000);
+    const r = await fetch("/api/health", { signal: ctl.signal }); health = await r.json();
+    $("#dropSub").textContent = "each .h5ad file is one slide";
+    if (!health.ok) startError("The HEBI server is running but not ready: " + (health.error || "unknown problem") + " Uploads are off until this is fixed; the demo still works.");
+    else { $("#optK").value = health.default_k_graph; $("#optSeed").value = health.default_seed; $("#optClusters").value = health.default_n_clusters;
+      const po = $("#optInit").querySelector("option[value=pretrained]");
+      po.disabled = !health.pretrained_available;
+      if (!health.pretrained_available) {
+        po.textContent = "Pretrained HEBI (checkpoint unavailable)";
+        $("#optInit").value = "random";
+        startError("This server has no pretrained checkpoint. Zero-shot with random weights is not a trained model; choose Train first for meaningful learned representations, or connect a pretrained checkpoint.");
+      }
+      if (health.default_n_metis) $("#optMetis").value = health.default_n_metis;
+      const so = $("#optNiche").querySelector("option[value=spatial]");
+      so.disabled = !health.spatial_objective_available;
+      if (!health.spatial_objective_available) so.textContent = "Spatially regularised (not available on this server)";
+      if (health.default_epochs) { $("#optEpochs").value = health.default_epochs; $("#optEpochs").max = health.max_epochs; } }
+  } catch (_) {
+    health = null;
+    const n = $("#serverNote"); n.hidden = false; n.className = "notice";
+    n.textContent = "This page is a viewer: you can explore the example run and the demo here. To run HEBI on your own sections, open it in Colab, which gives you a free GPU.";
+    $("#colabBtn").hidden = false;
+  }
+  const ok = !!(health && health.ok);
+  $("#pickBtn").disabled = !ok; if (!ok) $("#dropSub").textContent = "uploads need the HEBI server";
+  if (!health) {          // viewer mode: running on your own data happens in Colab
+    $("#dropSub").textContent = "To run HEBI on your own sections, open this page in Colab with a free GPU.";
+    $("#pickBtn").disabled = false; $("#pickBtn").textContent = "Open in Colab";
+    $("#pickBtn").onclick = () => window.open(COLAB_URL, "_blank", "noopener");
+  }
+}
+
+/* ============================================================
+   Model state animation. A small HEBI hierarchy (cells -> communities ->
+   niches). Zero-shot: frost, still edges, slow falling crystals. Continual:
+   embers rise and signals run up the hierarchy as the weights train.
+   ============================================================ */
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+class ModeStage {
+  constructor(canvas, { compact = false } = {}) {
+    this.c = canvas; this.g = canvas.getContext("2d"); this.compact = compact;
+    this.m = 0; this.target = 0; this.heat = 1; this.t = 0; this.running = false; this.raf = 0;
+    const rnd = mulberry32(7);
+    const tiers = compact ? [16, 7, 3] : [12, 6, 3];
+    this.nodes = tiers.map((n, l) => Array.from({ length: n }, (_, i) => ({
+      x: (i + 0.5) / n + (rnd() - .5) * .04 / (l + 1), y: (compact ? [.8, .5, .2] : [.58, .36, .14])[l], l, ph: rnd() * 6.28 })));
+    this.levels = compact ? [.8, .5, .2] : [.58, .36, .14];
+    this.edges = [];
+    for (let l = 0; l < 2; l++) for (const a of this.nodes[l]) {
+      const up = this.nodes[l + 1]; let best = 0, d2 = 9;
+      up.forEach((b, j) => { const d = Math.abs(a.x - b.x); if (d < d2) { d2 = d; best = j; } });
+      this.edges.push([a, up[best]]);
+      if (rnd() < .35) { const j = clamp(best + (rnd() < .5 ? -1 : 1), 0, up.length - 1); if (j !== best) this.edges.push([a, up[j]]); }
+    }
+    this.pulses = this.edges.map(() => ({ p: rnd(), v: .25 + rnd() * .5 }));
+    this.parts = Array.from({ length: compact ? 46 : 60 }, () => this.spawn(rnd, true));
+    this.rnd = rnd;
+    new ResizeObserver(() => { this.resize(); if (!this.running) this.draw(); }).observe(canvas);
+    this.resize();
+  }
+  spawn(rnd = this.rnd, init = false) {
+    return { x: rnd(), y: init ? rnd() : (this.m > .5 ? 1.05 : -0.05), s: .5 + rnd(), v: .3 + rnd() * .7,
+             w: rnd() * 6.28, r: rnd() * 6.28 };
+  }
+  resize() {
+    const r = this.c.getBoundingClientRect(), dpr = Math.min(devicePixelRatio || 1, 2);
+    if (r.width < 4) return;
+    this.c.width = r.width * dpr; this.c.height = r.height * dpr; this.dpr = dpr; this.W = r.width; this.H = r.height;
+  }
+  set(target, snap = false) { this.target = target; if (snap || REDUCED) this.m = target; this.start(); }
+  start() {
+    if (REDUCED) { this.draw(); return; }
+    if (this.running) return; this.running = true; let last = performance.now();
+    const step = now => { if (!this.running) return;
+      const dt = Math.min(.05, (now - last) / 1000); last = now; this.tick(dt); this.draw();
+      this.raf = requestAnimationFrame(step); };
+    this.raf = requestAnimationFrame(step);
+  }
+  stop() { this.running = false; cancelAnimationFrame(this.raf); }
+  tick(dt) {
+    this.t += dt; this.m += (this.target - this.m) * Math.min(1, dt * 2.2);
+    const hot = this.m, speed = (0.25 + 1.6 * hot) * (hot > .5 ? this.heat : 1);
+    for (const p of this.pulses) p.p = (p.p + dt * p.v * speed * hot) % 1;
+    for (const q of this.parts) {
+      // crystals fall slowly and sway; embers rise fast and flicker
+      q.y += dt * (hot > .5 ? -(.18 + .32 * q.v) * this.heat : .035 * q.v);
+      q.x += dt * (hot > .5 ? Math.sin(this.t * 3 + q.w) * .03 : Math.sin(this.t * .6 + q.w) * .01);
+      q.r += dt * (hot > .5 ? 2 : .3);
+      if (q.y < -.08 || q.y > 1.08) Object.assign(q, this.spawn());
+    }
+  }
+  mix(a, b, t) { const x = hexRgb(a), y = hexRgb(b); return mixRgb(x, y, t); }
+  col(a, b, alpha = 1) { const c = this.mix(a, b, this.m); return `rgba(${c[0]},${c[1]},${c[2]},${alpha})`; }
+  draw() {
+    const g = this.g, W = this.W, H = this.H, m = this.m; if (!W) return;
+    g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    const bg = g.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, this.col("#e3f4f0", "#fff2df")); bg.addColorStop(1, this.col("#c9e8e4", "#ffdec6"));
+    g.fillStyle = bg; g.fillRect(0, 0, W, H);
+    // warm glow from below when training
+    if (m > .02) { const rg = g.createRadialGradient(W / 2, H * 1.05, 0, W / 2, H * 1.05, H * 1.1);
+      rg.addColorStop(0, `rgba(240,138,75,${.32 * m * this.heat})`); rg.addColorStop(1, "rgba(240,138,75,0)");
+      g.fillStyle = rg; g.fillRect(0, 0, W, H); }
+    const px = n => ({ x: 18 + n.x * (W - 36), y: n.y * H });
+    // edges
+    g.lineWidth = 1.2;
+    this.edges.forEach(([a, b], i) => { const A = px(a), B = px(b);
+      g.strokeStyle = this.col("#b9cde6", "#e0a98f", .9); g.beginPath(); g.moveTo(A.x, A.y); g.lineTo(B.x, B.y); g.stroke();
+      if (m > .05) { const p = this.pulses[i].p, x = A.x + (B.x - A.x) * p, y = A.y + (B.y - A.y) * p;
+        g.fillStyle = `rgba(255,190,110,${m})`; g.shadowColor = "rgba(240,138,75,.9)"; g.shadowBlur = 8 * m;
+        g.beginPath(); g.arc(x, y, 1.9, 0, 6.2832); g.fill(); g.shadowBlur = 0; }
+    });
+    // nodes
+    for (const tier of this.nodes) for (const n of tier) { const P = px(n), r = [3.2, 5, 7.5][n.l] * (this.compact ? .9 : 1);
+      const flick = m > .05 ? 1 + .12 * m * Math.sin(this.t * 7 + n.ph) : 1;
+      g.fillStyle = this.col(["#d0f2ed", "#a3ddd4", "#78c9bf"][n.l], ["#ffd08a", "#f8a868", "#f08a4b"][n.l]);
+      g.strokeStyle = this.col("#2e8a8e", "#c2456e", .9); g.lineWidth = 1.2;
+      g.shadowColor = this.col("#ffffff", "#f08a4b", .9); g.shadowBlur = 6 + 8 * m;
+      g.beginPath(); g.arc(P.x, P.y, r * flick, 0, 6.2832); g.fill(); g.stroke(); g.shadowBlur = 0;
+      if (m < .6) {           // frost: a small six-pointed glint on each node
+        g.strokeStyle = `rgba(255,255,255,${(1 - m) * .9})`; g.lineWidth = .9; g.beginPath();
+        for (let k = 0; k < 3; k++) { const a = k * 1.0472 + n.ph; g.moveTo(P.x - Math.cos(a) * r * .7, P.y - Math.sin(a) * r * .7); g.lineTo(P.x + Math.cos(a) * r * .7, P.y + Math.sin(a) * r * .7); }
+        g.stroke(); }
+    }
+    // particles: ice crystals (cold) or embers (hot)
+    for (const q of this.parts) { const x = q.x * W, y = q.y * H;
+      if (m < .5) { const a = (1 - m * 2) * .8, s = 2.2 + 2.6 * q.s;
+        g.strokeStyle = `rgba(122,160,206,${a})`; g.lineWidth = .9; g.beginPath();
+        for (let k = 0; k < 3; k++) { const ang = q.r + k * 1.0472; g.moveTo(x - Math.cos(ang) * s, y - Math.sin(ang) * s); g.lineTo(x + Math.cos(ang) * s, y + Math.sin(ang) * s); }
+        g.stroke();
+      } else { const a = (m - .5) * 2 * (.45 + .55 * Math.abs(Math.sin(this.t * 6 + q.w)));
+        g.fillStyle = `rgba(${q.s > 1 ? "255,170,90" : "230,90,110"},${a})`;
+        g.shadowColor = "rgba(240,138,75,.9)"; g.shadowBlur = 6;
+        g.beginPath(); g.arc(x, y, .9 + q.s * 1.1, 0, 6.2832); g.fill(); g.shadowBlur = 0; }
+    }
+    // tier labels
+    if (!this.compact) { g.font = "500 11px " + getComputedStyle(document.body).fontFamily; g.fillStyle = this.col("#5f7fa8", "#9a4a5e", .85);
+      g.textAlign = "right"; [["niches", this.levels[2]], ["communities", this.levels[1]], ["cells", this.levels[0]]].forEach(([t, y]) => g.fillText(t, W - 10, y * H - 10)); g.textAlign = "left"; }
+  }
+}
+var MODE_STAGE = new ModeStage($("#modeCanvas"));
+var PROG_STAGE = new ModeStage($("#progCanvas"), { compact: true });
+// pause the start-screen animation when it is off screen or another view is open
+new IntersectionObserver(es => es.forEach(e => e.isIntersecting && !$("#startView").hidden ? MODE_STAGE.start() : MODE_STAGE.stop()))
+  .observe($("#modeCanvas"));
+
+function drawHero() {
+  const c = $("#heroCanvas"), r = c.getBoundingClientRect(), dpr = Math.min(devicePixelRatio || 1, 2);
+  if (r.width < 10) return;
+  c.width = r.width * dpr; c.height = r.height * dpr;
+  const g = c.getContext("2d"), t = makeTissue(5200, 11), s = Math.min(r.width / 2.6, r.height / 2.35) * dpr / 2600;
+  const ink = ["#ffa970", "#ffd6a8", "#d5f0de", "#ff6f72", "#ffb58b", "#f28aab", "#9bd4bd", "#fae0b2", "#b4e1df"];   // coral and sage stain
+  for (let i = 0; i < 5200; i++) {
+    g.fillStyle = ink[t.type[i]]; g.beginPath();
+    g.arc(c.width / 2 + t.xy[2 * i] * s, c.height / 2 - t.xy[2 * i + 1] * s, (t.type[i] === 2 ? 1.5 : 2.1) * dpr, 0, 6.2832); g.fill();
+  }
+  c.classList.add("on");
+}
+
+/* ============================================================
+   Discovery carousel: interesting, source-linked stories during a run.
+   Distinguish disputed historical anecdotes from verified findings.
+   ============================================================ */
+const DISCOVERIES = [
+  {category:"Microbiology, 1928", title:"A messy bench and a holiday.", body:"Alexander Fleming came back from a summer break to find mould growing on a forgotten plate of staphylococci. Around the mould, the bacteria had died. That mould was Penicillium, and the clear ring became penicillin.", url:"https://www.nobelprize.org/prizes/medicine/1945/summary/"},
+  {category:"Medicine, 1984", title:"He drank the bacteria to win the argument.", body:"Few believed that stomach ulcers could be caused by bacteria. Barry Marshall swallowed a culture of Helicobacter pylori, developed gastritis within days, and helped prove the point. He and Robin Warren shared the 2005 Nobel Prize.", url:"https://www.nobelprize.org/prizes/medicine/2005/summary/"},
+  {category:"Genetics, 1940s to 1983", title:"Genes that jump, and a 30-year wait.", body:"Studying the speckled colours of maize kernels, Barbara McClintock found pieces of DNA that move around the genome. Many colleagues did not take it seriously. Decades later the field caught up, and in 1983 she received an unshared Nobel Prize.", url:"https://www.nobelprize.org/prizes/medicine/1983/summary/"},
+  {category:"Neuroscience, 1906", title:"Two rivals, one prize, one stain.", body:"Camillo Golgi invented the silver stain that made single neurons visible. Santiago Ramón y Cajal used it to argue that the brain is made of separate cells, which Golgi rejected. They shared the 1906 Nobel Prize and disagreed in their lectures.", url:"https://www.nobelprize.org/prizes/medicine/1906/summary/"},
+  {category:"Microscopy, 1665", title:"Why a cell is called a cell.", body:"Looking at a thin slice of cork, Robert Hooke saw rows of tiny empty boxes. They reminded him of the small rooms monks lived in, so he called them cells. The word stuck long before anyone knew what cells really were.", url:null},
+  {category:"Stem cells, 2006", title:"Four genes to turn back the clock.", body:"Shinya Yamanaka showed that switching on just four genes can turn an adult mouse skin cell into a cell that behaves like an embryonic stem cell. He shared the 2012 Nobel Prize with John Gurdon, who had cloned frogs from adult cells in 1962.", url:"https://www.nobelprize.org/prizes/medicine/2012/summary/"},
+  {category:"Development, 1924", title:"A small graft that organised a whole body.", body:"Hilde Mangold moved a tiny piece of one newt embryo into another, and a second body axis grew. The organizer showed that position and neighbours tell cells what to become. Mangold died that year; Hans Spemann received the 1935 Nobel Prize.", url:"https://www.nobelprize.org/prizes/medicine/1935/summary/"},
+  {category:"Developmental biology", title:"Every cell of a worm, traced by hand.", body:"John Sulston watched C. elegans embryos under the microscope and recorded where each cell came from. The adult hermaphrodite has a fixed set of 959 somatic cells, and its whole lineage is known. It became a model for how cells decide their fate.", url:"https://www.nobelprize.org/prizes/medicine/2002/summary/"},
+  {category:"Mathematics meets biology, 1952", title:"How a leopard could get its spots.", body:"Alan Turing proposed that two chemicals spreading and reacting at different speeds can create stripes and spots on their own. Spatial pattern, in this view, needs no blueprint, only local rules and neighbours.", url:null},
+  {category:"Pharmacology, 1970s", title:"A recipe from the 4th century.", body:"Searching old Chinese medical texts for a malaria treatment, Tu Youyou found a note by Ge Hong to soak sweet wormwood in cold water. Hot extraction had been destroying the active compound. The result was artemisinin, and the 2015 Nobel Prize.", url:"https://www.nobelprize.org/prizes/medicine/2015/summary/"},
+  {category:"Molecular biology, 1983", title:"An idea on a night drive.", body:"Driving through the California hills at night, Kary Mullis worked out how to copy a stretch of DNA again and again with repeated heating and cooling. The polymerase chain reaction now runs in nearly every biology lab. Nobel Prize, 1993.", url:"https://www.nobelprize.org/prizes/chemistry/1993/summary/"},
+  {category:"Epidemiology, 1854", title:"A map that stopped an epidemic.", body:"During a cholera outbreak in London, John Snow marked each death on a street map. The cases clustered around one water pump on Broad Street. The pump handle was removed. It is one of the earliest spatial analyses of disease.", url:null},
+  {category:"Spatial transcriptomics, 2016", title:"Reading genes without losing the map.", body:"Ståhl and colleagues placed tissue sections on slides printed with barcoded spots, so every RNA read carried its position. It let researchers see where in the tissue each gene is active, not only whether it is.", url:"https://doi.org/10.1126/science.aaf2403"},
+  {category:"Spatial transcriptomics, 2020", title:"Method of the Year.", body:"Nature Methods named spatially resolved transcriptomics its Method of the Year 2020. The editors highlighted that knowing where a cell sits changes what its expression profile means.", url:"https://pubmed.ncbi.nlm.nih.gov/33408395/"},
+  {category:"Networks, 1998", title:"Six handshakes and a few shortcuts.", body:"Watts and Strogatz showed that a mostly local network becomes a small world once a few long-range links are added. Neurons, power grids and social circles share the pattern: clustered neighbourhoods, short paths between them.", url:"https://doi.org/10.1038/30918"},
+  {category:"Graph theory, 1736", title:"Seven bridges, no route.", body:"The people of Königsberg wondered whether they could walk across all seven bridges exactly once. Euler showed it was impossible by keeping only what mattered: land masses as points and bridges as links. That was the first graph.", url:"https://academic.oup.com/book/45622/chapter/394863558"},
+  {category:"Chemistry, 1865 and 1890", title:"A snake biting its own tail.", body:"August Kekulé proposed the ring structure of benzene in 1865. Twenty-five years later he told a story of dozing by the fire and seeing a snake seize its own tail. Historians still debate how much of the dream to believe.", url:"https://pubmed.ncbi.nlm.nih.gov/25257125/"},
+  {category:"Cell biology, 1962 to 2008", title:"A jellyfish lit up the inside of cells.", body:"Osamu Shimomura found green fluorescent protein while purifying a different glowing protein from jellyfish. Once GFP could be made in other organisms, researchers could watch proteins move inside living cells. Nobel Prize, 2008.", url:"https://www.nobelprize.org/prizes/chemistry/2008/summary/"},
+  {category:"Cancer, 1960s to 1992", title:"A tree bark that took 30 years.", body:"Paclitaxel was found in the bark of the Pacific yew through a programme screening plant extracts. Its unusual action, freezing the scaffolding cells need to divide, and a scarce supply kept it out of clinics for decades.", url:"https://www.cancer.gov/research/progress/discovery/taxol"},
+  {category:"Gene editing", title:"A bacterial memory of old infections.", body:"CRISPR began as an immune system in bacteria, which store short pieces of viral DNA as a record of past attacks. Repurposed in the lab, the same system can cut DNA at a chosen site.", url:"https://www.nobelprize.org/uploads/2024/03/doudna-lecture.pdf"},
+  {category:"Genomics", title:"Only about 1% writes proteins.", body:"Of roughly three billion letters in the human genome, around one percent codes for proteins. Much of the rest helps decide when, where and how strongly genes are switched on, which is why the same genome makes a neuron and a liver cell.", url:"https://www.genome.gov/about-genomics/fact-sheets/Deoxyribonucleic-Acid-Fact-Sheet"},
+  {category:"Microscopy, 1670s", title:"A draper who saw bacteria first.", body:"Antonie van Leeuwenhoek ground his own lenses to check the quality of cloth. Turned on pond water and the plaque from his teeth, they showed him tiny moving creatures he called animalcules, and he wrote to the Royal Society about them for decades.", url:null},
+  {category:"Spatial biology", title:"Where a cell lives is part of what it is.", body:"The same cell type can behave differently at a tumour edge, beside a vessel or deep in stroma. Cell atlases now record location next to expression for this reason.", url:"https://www.nature.com/articles/s41586-024-08338-4"},
+  {category:"About HEBI", title:"One cell, two views.", body:"The tissue panel shows where a cell is. The embedding panel shows which cells HEBI considers similar. Select cells in either one and the same cells light up in the other.", url:null},
+  {category:"About HEBI", title:"Neighbourhoods as a graph.", body:"HEBI links each cell to its spatial neighbours. The first level learns each cell in the context of those neighbours, then groups of nearby cells, then whole niches.", url:null},
+  {category:"About HEBI", title:"Clusters are not niches.", body:"Cell clusters group cells with similar learned profiles. Niches describe the kind of neighbourhood a cell sits in. A T cell in a tumour and a T cell in a lymph node share a cluster but not a niche.", url:null},
+  {category:"About HEBI", title:"Frozen or warm.", body:"Zero-shot uses the pretrained weights as they are, which is fast and leaves the model unchanged. Training first lets HEBI adapt to your slides and learn niches from them, at the cost of time.", url:null},
+  {category:"About HEBI", title:"Try changing the number of niches.", body:"After a trained run, the niche menu offers coarser and finer resolutions. Coarse niches merge similar prototypes; finer ones split large niches. The same cells are re-labelled, so you can watch regions combine.", url:null},
+  {category:"Immunology, 1890s", title:"Cells that eat.", body:"Ilya Mechnikov pushed rose thorns into transparent starfish larvae and watched mobile cells gather around them. He proposed that some cells defend the body by engulfing intruders, an idea that won him the 1908 Nobel Prize.", url:"https://www.nobelprize.org/prizes/medicine/1908/summary/"},
+  {category:"Neuroscience, 1950s", title:"A giant axon from a squid.", body:"Hodgkin and Huxley studied the squid's unusually wide nerve fibre, wide enough to slide a wire inside. Their measurements explained how a nerve impulse travels and earned the 1963 Nobel Prize.", url:"https://www.nobelprize.org/prizes/medicine/1963/summary/"},
+];
+let discoveryIndex = 0, discoveryTimer = null, discoveryStart = 0;
+const DISCOVERY_INTERVAL = 10500;
+function showDiscovery(i, animate = true) {
+  discoveryIndex = (i + DISCOVERIES.length) % DISCOVERIES.length;
+  const f = DISCOVERIES[discoveryIndex], card = $("#factDeck");
+  if (animate && !REDUCED) { card.classList.remove("fact-reveal"); void card.offsetWidth; card.classList.add("fact-reveal"); }
+  $("#factCategory").textContent = f.category;
+  $("#factHeadline").textContent = f.title;
+  $("#factDescription").textContent = f.body;
+  $("#factSource").hidden = !f.url;
+  $("#factSource").href = f.url || "#";
+  $("#factCount").textContent = `${discoveryIndex + 1} of ${DISCOVERIES.length}`;
+}
+function startDiscoveries() {
+  stopDiscoveries();
+  discoveryIndex = Math.floor(Math.random() * DISCOVERIES.length);
+  showDiscovery(discoveryIndex, false);
+}
+function stopDiscoveries() {
+  if (discoveryTimer) { clearInterval(discoveryTimer); discoveryTimer = null; }
+}
+$("#factPrev").onclick = () => showDiscovery(discoveryIndex - 1);
+$("#factNext").onclick = () => showDiscovery(discoveryIndex + 1);
+
+/* ---- wiring ---- */
+$("#pickBtn").onclick = () => $("#fileInput").click();
+$("#fileInput").onchange = e => { addFiles([...e.target.files]); e.target.value = ""; };
+$("#runBtn").onclick = startRun;
+function modeChanged() {
+  const train = $("#optMode").value === "continual";
+  document.querySelectorAll(".mode-pick button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === $("#optMode").value)));
+  $("#modeCard").classList.toggle("hot", train); $("#modeCard").classList.toggle("cold", !train);
+  document.body.classList.toggle("train-active", train);
+  $("#modeState").textContent = train ? "Weights warming to your slides" : "Weights frozen";
+  $("#modeEyebrow").textContent = train ? "Continual training" : "Zero-shot";
+  $("#modeExplainer").textContent = train ? "HEBI keeps learning on your slides, one epoch at a time, then encodes them."
+    : ($("#optInit").value === "pretrained" ? "One pass of the pretrained encoder over every cell." : "One pass of an untrained encoder: a baseline, not a learned model.");
+  MODE_STAGE.set(train ? 1 : 0);
+  document.querySelectorAll(".trainopts").forEach(e => e.hidden = !train);
+  $("#modeNote").textContent = train
+    ? "HEBI starts from the chosen weights and is trained on your slides for the chosen number of epochs, then the cells are encoded. Niches are learned in this mode, and slides from different platforms are aligned through them. Training takes much longer than zero-shot and needs a GPU for large slides."
+    : "Zero-shot runs the encoder once and groups cells by their encoding. It is fast.";
+  if (train && $("#optNiche").value === "spatial")
+    $("#modeNote").textContent += " The spatially regularised objective adds two terms to niche training: each community is assigned to one niche with confidence, and neighbouring communities are encouraged to share a niche. 4096 communities per section suit it (More settings).";
+  const pre = $("#optInit").value === "pretrained";
+  if (pre) $("#modeNote").textContent += " Using learned, pretrained HEBI weights.";
+  else if (!train) $("#modeNote").textContent += " Warning: random weights are untrained, so this is not meaningful pretrained zero-shot inference.";
+  else $("#modeNote").textContent += " Starting from random weights; train them on your data.";
+}
+$("#optMode").onchange = modeChanged; $("#optInit").onchange = modeChanged;
+document.querySelectorAll(".mode-pick button").forEach(b => b.onclick = () => { $("#optMode").value = b.dataset.mode; modeChanged(); });
+$("#optNiche").onchange = () => {
+  if ($("#optNiche").value === "spatial" && +$("#optMetis").value === 1024) $("#optMetis").value = 4096;
+  if ($("#optNiche").value === "original" && +$("#optMetis").value === 4096) $("#optMetis").value = 1024;
+  modeChanged();
+};
+$("#groupClusters").onclick = () => { if (S.group !== "clusters") loadClusters(S.k); };
+$("#groupNiches").onclick = () => { if (S.group !== "niches") loadNiches(); };
+$("#nicheK").onchange = () => loadNiches(+$("#nicheK").value);
+$("#tinyPolicy").onchange = () => { S.tiny = $("#tinyPolicy").value; fillNicheK(); loadNiches(S.nicheK); };
+const slide = $("#slide");
+["dragenter", "dragover"].forEach(t => slide.addEventListener(t, e => { e.preventDefault(); if (health && health.ok) slide.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => slide.addEventListener(t, e => { e.preventDefault(); slide.classList.remove("over"); }));
+slide.addEventListener("drop", e => addFiles([...e.dataTransfer.files]));
+$("#previewBtn").onclick = () => {
+  show("progressView");
+  $("#progTitle").textContent = "Preview of the waiting screen";
+  $("#progSub").textContent = "Nothing is uploaded and no model is running.";
+  $("#uploadBar").hidden = true; $("#epochBar").hidden = true;
+  $("#progLog").textContent = "Preview mode: no actual job is running.";
+  $("#progError").hidden = true;
+  $("#progBack").hidden = false;
+  $("#progBack").textContent = "Back to the start";
+  RUN_MODE = $("#optMode").value;
+  PROG_STAGE.set(RUN_MODE === "continual" ? 1 : 0, true); PROG_STAGE.start();
+  drawSteps(["read", "graph", "encode", "cluster", "embed"], "graph", "running");
+  startDiscoveries();
+};
+$("#colabBtn").href = COLAB_URL;
+fetch(`${EXAMPLE_DIR}/meta.json`, { method: "HEAD" }).then(r => { if (r.ok) $("#exampleBtn").hidden = false; }).catch(() => {});
+$("#exampleBtn").onclick = async () => { const b = $("#exampleBtn"), label = b.innerHTML; b.disabled = true; b.textContent = "Loading the example";
+  try { await openSource(new StaticSource(EXAMPLE_DIR)); } catch (e) { startError("The example could not be loaded: " + e.message); show("startView"); }
+  finally { b.disabled = false; b.innerHTML = label; } };
+$("#demoBtn").onclick = async () => { const b = $("#demoBtn"), label = b.innerHTML; b.disabled = true; b.textContent = "Building the demo tissue";
+  await new Promise(r => setTimeout(r, 30));
+  try { await openSource(new DemoSource()); } finally { b.disabled = false; b.innerHTML = label; } };
+const goStart = () => { clearInterval(pollTimer); PROG_STAGE.stop(); stopDiscoveries(); hideTip(); $("#barTitle").textContent = "the living tissue explorer"; show("startView"); };
+$("#newBtn").onclick = goStart; $("#progBack").onclick = goStart;
+$("#dlBtn").onclick = e => { e.stopPropagation(); const l = $("#dlList"); l.hidden = !l.hidden; $("#dlBtn").setAttribute("aria-expanded", String(!l.hidden)); };
+document.addEventListener("click", () => { $("#dlList").hidden = true; $("#dlBtn").setAttribute("aria-expanded", "false"); $("#geneSuggest").hidden = true; });
+$("#modeCluster").onclick = () => setMode("cluster"); $("#modeGene").onclick = () => setMode("gene"); $("#modeSlide").onclick = () => setMode("slide");
+$("#selClear").onclick = () => setSelection(null);
+const kr = $("#kRange"); kr.oninput = () => $("#kOut").textContent = kr.value; kr.onchange = () => loadClusters(+kr.value);
+
+/* gene search */
+const gi = $("#geneInput"), gs = $("#geneSuggest"); let gsel = -1;
+function suggest() {
+  const q = gi.value.trim().toUpperCase(); gsel = -1;
+  if (!q || !S.meta) { gs.hidden = true; gi.setAttribute("aria-expanded", "false"); return; }
+  const all = S.meta.genes, a = [], b = [];
+  for (const g of all) { const u = g.toUpperCase(); if (u.startsWith(q)) a.push(g); else if (b.length < 12 && u.includes(q)) b.push(g); if (a.length >= 12) break; }
+  const hits = a.concat(b).slice(0, 12);
+  gs.replaceChildren(...(hits.length ? hits.map(g => { const li = el("li", { role: "option", text: g }); li.onmousedown = e => { e.preventDefault(); gs.hidden = true; setGene(g); }; return li; })
+    : [el("li", { text: "No gene matches", style: "color:var(--ink-3);cursor:default" })]));
+  gs.hidden = false; gi.setAttribute("aria-expanded", "true");
+}
+gi.addEventListener("input", suggest); gi.addEventListener("focus", suggest); gi.addEventListener("click", e => e.stopPropagation());
+gi.addEventListener("keydown", e => {
+  const items = [...gs.querySelectorAll("li[role=option]")];
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (!items.length) return;
+    gsel = (gsel + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; items.forEach((li, i) => li.classList.toggle("on", i === gsel)); items[gsel].scrollIntoView({ block: "nearest" }); }
+  else if (e.key === "Enter") { const g = gsel >= 0 ? items[gsel].textContent : (items[0] ? items[0].textContent : gi.value.trim()); if (g) { gs.hidden = true; setGene(g); } }
+  else if (e.key === "Escape") gs.hidden = true;
+});
+
+$("#geneRamp").style.background = rampCss(GENE_STOPS); $("#dotRamp").style.background = rampCss(DOT_STOPS);
+show("startView"); showDiscovery(0, false); checkServer().then(modeChanged); requestAnimationFrame(drawHero); modeChanged();
+</script>
+</body>
+</html>

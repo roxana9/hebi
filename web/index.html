@@ -515,6 +515,9 @@ body.train-active .brand-i-sigil { background:#ff9a45; clip-path:polygon(51% 0,7
 @media(max-width:760px){.start{padding:35px 15px 50px;}.start h1{font-size:clamp(36px,9.2vw,57px)}.slide{grid-template-columns:1fr;}.slide-label{padding:10px 17px;flex-direction:row;align-items:baseline;}.slide-label::after{display:none;}.drop-copy{padding:25px 19px 8px;}.drop-copy strong{max-width:100%;}.slide-glass canvas{height:170px}.hero-kicker{font-size:9px;letter-spacing:.11em;}.feature-pills{gap:6px;}.feature-pills span{font-size:11px;}.fact-deck{min-height:280px;}.mark>span{font-size:11px;}.bar{padding:13px 15px;}.grid{grid-template-columns:1fr;}.progress{padding:27px 16px;}}
 .colab-btn{background:#f4773b;border-color:#f4773b;color:#102b3a;text-decoration:none;}
 .colab-btn:hover{background:#ff9b53;border-color:#ff9b53;color:#102b3a;}
+.example-picks{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+.example-picks button{border:1px dashed #b4cfc3;background:#fffefa;border-radius:9px;padding:7px 12px;font-size:13px;color:#1f624e;font-weight:600;}
+.example-picks button:hover{background:#e5f2ec;}
 .preview-btn{width:100%;display:flex;gap:10px;justify-content:space-between;align-items:center;background:transparent;color:#356575;border:1px dashed #b4cfc3;padding:10px 13px;font-size:13px;}
 .preview-btn:hover{background:#e5f2ec;color:#173c51;border-color:#8ebea5;}
 @media(prefers-reduced-motion:reduce){.ambient-orbit,.ambient-bead,.brand-i-sigil,.live-pulse,.fact-reveal h3,.fact-reveal p,.fact-reveal .fact-category{animation:none!important;}html{scroll-behavior:auto}.btn,.mode-pick button,.fact-nav button{transition:none!important;}}
@@ -629,6 +632,8 @@ body.train-active .brand-i-sigil { background:#ff9a45; clip-path:polygon(51% 0,7
       <canvas id="heroCanvas" aria-hidden="true"></canvas>
     </div>
   </div>
+  <p class="need" id="exampleRow" hidden>No file at hand? Use an example section:</p>
+  <div class="example-picks" id="examplePicks" hidden></div>
   <div class="chosen" id="chosen" hidden>
     <ul id="chosenList"></ul>
     <div class="foot">
@@ -1651,6 +1656,11 @@ async function startRun() {
     if (!r.ok) throw new Error(j.error || (j.detail && JSON.stringify(j.detail)) || `The server refused the run (${r.status}).`);
     let sent = 0;
     for (const [i, f] of files.entries()) {
+      if (f.example) {
+        const ex = await fetch(`/api/jobs/${j.job_id}/example?name=${encodeURIComponent(f.name)}`, { method: "POST" });
+        if (!ex.ok) { const e = await ex.json().catch(() => ({})); throw new Error(e.error || e.detail || `Could not add ${f.name}.`); }
+        sent += f.size; bar.style.width = pct(sent / total); continue;
+      }
       await uploadOne(j.job_id, f, loaded => { bar.style.width = pct((sent + loaded) / total);
         $("#progSub").textContent = `Uploading ${f.name}` + (many ? ` (${i + 1} of ${files.length})` : "") + `: ${pct((sent + loaded) / total)}`; });
       sent += f.size;
@@ -1698,6 +1708,11 @@ async function checkServer() {
         startError("This server has no pretrained checkpoint. Zero-shot with random weights is not a trained model; choose Train first for meaningful learned representations, or connect a pretrained checkpoint.");
       }
       if (health.default_n_metis) $("#optMetis").value = health.default_n_metis;
+      const ex = health.examples || [];
+      $("#exampleRow").hidden = $("#examplePicks").hidden = !ex.length;
+      $("#examplePicks").replaceChildren(...ex.map(e => { const b = el("button", { type: "button", text: e.name.replace(/\.h5ad$/i, "") });
+        b.onclick = () => { if (!chosen.some(c => c.example && c.name === e.name)) { chosen.push({ name: e.name, size: e.size, example: true }); renderChosen(); } };
+        return b; }));
       const so = $("#optNiche").querySelector("option[value=spatial]");
       so.disabled = !health.spatial_objective_available;
       if (!health.spatial_objective_available) so.textContent = "Spatially regularised (not available on this server)";

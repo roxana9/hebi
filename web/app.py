@@ -85,6 +85,14 @@ MAX_UPLOAD_GB = float(os.environ.get("HEBI_WEB_MAX_UPLOAD_GB", "8"))
 MAX_CELLS = int(os.environ.get("HEBI_WEB_MAX_CELLS", "1500000"))
 MIN_CELLS = 200
 MAX_FILES = int(os.environ.get("HEBI_WEB_MAX_FILES", "12"))
+# Optional folder of example .h5ad sections the page offers without an upload.
+EXAMPLES_DIR = os.environ.get("HEBI_WEB_EXAMPLES", "")
+
+
+def _examples():
+    if not EXAMPLES_DIR or not Path(EXAMPLES_DIR).is_dir():
+        return {}
+    return {p.name: p for p in sorted(Path(EXAMPLES_DIR).glob("*.h5ad"))}
 KEEP_JOBS = int(os.environ.get("HEBI_WEB_KEEP_JOBS", "3"))    # finished runs kept in memory
 EMBED_MAX_CELLS = int(os.environ.get("HEBI_WEB_EMBED_MAX_CELLS", "40000"))
 
@@ -1030,6 +1038,7 @@ def _spatial_available():
 def health():
     info = {"ok": True, "vocab_found": Path(VOCAB_PATH).exists(),
             "max_upload_gb": MAX_UPLOAD_GB, "max_cells": MAX_CELLS, "max_files": MAX_FILES,
+            "examples": [{"name": n, "size": p.stat().st_size} for n, p in _examples().items()],
             "default_k_graph": DEFAULT_K_GRAPH, "default_seed": DEFAULT_SEED,
             "default_n_clusters": DEFAULT_N_CLUSTERS,
             "pretrained_available": bool(CHECKPOINT_PATH and Path(CHECKPOINT_PATH).exists()),
@@ -1133,6 +1142,28 @@ async def add_file(job_id: str, request: Request, filename: str):
         raise
     job.files.append({"filename": name, "label": label, "stem": stem,
                       "path": upload_path, "size": received})
+    return {"files": len(job.files)}
+
+
+@app.post("/api/jobs/{job_id}/example")
+def add_example(job_id: str, name: str):
+    """Add one of the server's example sections to the run, without an upload."""
+    job = get_job(job_id)
+    if job.status != "uploading":
+        raise HTTPException(409, "This run has already started.")
+    src = _examples().get(Path(name).name)
+    if src is None:
+        raise HTTPException(404, f"No example called {name}")
+    if len(job.files) >= MAX_FILES:
+        raise HTTPException(422, f"A run takes at most {MAX_FILES} slides.")
+    stem = re.sub(r"[^A-Za-z0-9_.-]", "_", src.stem)[:80] or "section"
+    base, i = stem, 2
+    while stem in {e["stem"] for e in job.files}:
+        stem, i = f"{base}_{i}", i + 1
+    dst = job.dir / "input" / f"{stem}.h5ad"
+    shutil.copyfile(src, dst)
+    job.files.append({"filename": src.name, "label": src.stem[:80], "stem": stem,
+                      "path": dst, "size": dst.stat().st_size})
     return {"files": len(job.files)}
 
 

@@ -103,7 +103,8 @@ hebi-run --help
 ## Pretrained weights
 
 The pretrained checkpoint and the gene vocabulary are on Hugging Face:
-[huggingface.co/Roxana9/hebi](https://huggingface.co/Roxana9/hebi)
+[huggingface.co/Roxana9/hebi](https://huggingface.co/Roxana9/hebi).
+
 The weights are released under CC BY-NC 4.0 (non-commercial research use).
 | file | content |
 | --- | --- |

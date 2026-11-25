@@ -19,6 +19,29 @@ correction step.
 
 ---
 
+## Try HEBI in the browser
+
+**[Open the HEBI explorer](https://huggingface.co/spaces/Roxana9/HEBI-explorer)** and click
+**Open in Colab**. HEBI runs there on a free GPU, with nothing to install: upload your own
+`.h5ad` sections, or run the Xenium breast cancer example sections with one click.
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/roxana9/hebi/blob/main/web/HEBI_web_colab.ipynb)
+
+The web explorer currently covers two tasks:
+
+- **Cell type identification:** cell-level clusters from HEBI's cell embedding, with marker
+  genes, gene colouring, and the tissue shown next to the embedding.
+- **Niche (spatial domain) identification:** niches learned by HEBI, at the learned prototype
+  resolution or merged and refined to a chosen number of niches, shared across slides.
+
+Gene regulatory networks, cell-cell communication, supervised niche prediction and
+pretraining are available through the Python package (see [Quick start](#quick-start) and
+[What else it does](#what-else-it-does)).
+
+Each file needs cell positions in `obsm['spatial']` and gene symbols as variable names;
+raw counts or log-normalised values both work. Files stay in your Colab session and are
+deleted when it ends.
+
 ## Installation
 
 HEBI needs Python 3.11+, PyTorch and `torch_sparse`. Both are built per
@@ -81,7 +104,7 @@ hebi-run --help
 
 The pretrained checkpoint and the gene vocabulary are on Hugging Face:
 [huggingface.co/Roxana9/hebi](https://huggingface.co/Roxana9/hebi)
-
+The weights are released under CC BY-NC 4.0 (non-commercial research use).
 | file | content |
 | --- | --- |
 | `hebi_hybrid_oldL0.pt` | pretrained HEBI weights |

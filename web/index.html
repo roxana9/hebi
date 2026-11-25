@@ -608,7 +608,7 @@ body.train-active .brand-i-sigil { background:#ff9a45; clip-path:polygon(51% 0,7
       <section>
   <div class="demo-row">
     <button class="btn demo-btn" id="exampleBtn" hidden>Explore the breast cancer example</button>
-    <a class="btn demo-btn colab-btn" id="colabBtn" target="_blank" rel="noopener" hidden>Run HEBI on your own data (free GPU in Colab)</a>
+    <a class="btn demo-btn colab-btn" id="colabBtn" target="_blank" rel="noopener" hidden>Run HEBI in Colab: your data or the breast cancer example</a>
     <button class="btn demo-btn" id="demoBtn">Explore the synthetic demo</button>
     <button class="btn preview-btn" id="previewBtn" type="button">Preview the waiting screen</button>
     <p>No file at hand? The demo is two synthetic slides generated in your browser. It shows how the
@@ -1720,13 +1720,13 @@ async function checkServer() {
   } catch (_) {
     health = null;
     const n = $("#serverNote"); n.hidden = false; n.className = "notice";
-    n.textContent = "This page is a viewer: you can explore the example run and the demo here. To run HEBI on your own sections, open it in Colab, which gives you a free GPU.";
+    n.textContent = "To run HEBI, open this page in Colab (free GPU, nothing to install). There you can upload your own sections or run the Xenium breast cancer example sections. The demo below works here directly.";
     $("#colabBtn").hidden = false;
   }
   const ok = !!(health && health.ok);
   $("#pickBtn").disabled = !ok; if (!ok) $("#dropSub").textContent = "uploads need the HEBI server";
   if (!health) {          // viewer mode: running on your own data happens in Colab
-    $("#dropSub").textContent = "To run HEBI on your own sections, open this page in Colab with a free GPU.";
+    $("#dropSub").textContent = "Runs happen in Colab on a free GPU: upload your own sections there, or pick the breast cancer example.";
     $("#pickBtn").disabled = false; $("#pickBtn").textContent = "Open in Colab";
     $("#pickBtn").onclick = () => window.open(COLAB_URL, "_blank", "noopener");
   }
